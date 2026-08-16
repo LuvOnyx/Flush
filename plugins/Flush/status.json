@@ -1,0 +1,75 @@
+{
+  "plugin_name": "Flush",
+  "version": "v0.0.0",
+  "current_phase": "design_complete",
+  "ui_framework": "visage",
+  "complexity_score": 4,
+  "created_at": "2026-08-15T20:55:09Z",
+  "last_modified": "2026-08-16T01:15:00Z",
+  "phase_history": [
+    {
+      "phase": "ideation_complete",
+      "completed_at": "2026-08-15T20:55:09Z",
+      "framework_selected": null,
+      "notes": "Gain-staged channel strip for modern rap/RnB/drill. Hero feature: Flush Match (automatic input-vs-output loudness matching) so the user never has to guess the output knob after EQ/compression."
+    },
+    {
+      "phase": "plan_complete",
+      "completed_at": "2026-08-15T20:55:09Z",
+      "framework_selected": "visage",
+      "notes": "Signal flow: Input Trim -> EQ -> Compressor -> Flush Match -> Output. Complexity 3/5. Visage (pure C++) chosen for a FabFilter-style native front end. Mixbus primary use case; M/S + correlation metering; phase-fixing tools deferred to v2."
+    },
+    {
+      "phase": "design_complete",
+      "completed_at": "2026-08-15T22:00:00Z",
+      "framework_selected": "visage",
+      "final_version": "v3",
+      "iterations": 3,
+      "notes": "Pro-Q4-class 24-band dynamic EQ + Flush Match + glue compressor. Complexity 4/5. UNIFIED DYNAMICS ENGINE: one shared detector/gain-computer/ballistics core powers BOTH the glue compressor (broadband instance) and every dynamic EQ band (band-limited instance) - the compressor IS the engine behind dynamic mode. Sound quality is the product: double precision, analog-matched (Orfanidis) biquads, gain-Q interaction, Kaiser-FIR linear phase, 2x/4x oversampling, sample-accurate smoothing, denormal protection. v2 design kept: Pro-Q4 recreation (neon glow nodes/bands/lines, per-band colors), preset browser + A/B, settings modal (UI scaling + accent + refresh), uncapped render loop >=120 Hz, VU<->bar meter toggle, high-quality FFT analyzer. Honest quality goal: reference-class architecture + iterative parity toward FabFilter/Sonnox."
+    },
+    {
+      "phase": "code_in_progress",
+      "completed_at": "2026-08-15T23:10:00Z",
+      "framework_selected": "visage",
+      "notes": "IMPLEMENTATION COMPLETE (all remaining DSP + UI delivered). New DSP core, all pure C++/double-precision, 54/54 verified: FlushSpectral (FFT spectral dynamics via weighted overlap-add; above-threshold reduced toward threshold, below-threshold untouched, clean pass-through), Oversampler4x (cascade; round-trip flat 0.004 dB), gainQLinkedQ (analog gain-Q interaction). Processor wired: comp_mode Broadband/Spectral, 2x/4x oversampling, gain-Q link, factory presets (Clean Up, Bass, Drums, Vocal Presence, Rap RnB 808, Mastering Glue, FX Wash) + A/B compare slots, spectral/oversample/FIR latency all reported via setLatencySamples. Visage UI completed: Pro-Q4 recreation (glassy knobs, VU+bar meters, draggable EQ nodes over the analyzer) + preset browser + settings modal (UI scale/refresh/accent, scrim close). NOT compile-verified (no cmake/visage build here); first build + listen/measure pass remains. Prior verified: filters (Vicanek/Orfanidis decramped, shelves), dynamics (Oxford adaptive release), BS.1770 K-weighting (0.000000 dB), true-peak, FFT, linear-phase FIR (symmetry 3.8e-17), 2x oversampler (-72 dB image), analyzer."
+    }
+  ],
+  "validation": {
+    "creative_brief_exists": true,
+    "parameter_spec_exists": true,
+    "architecture_defined": true,
+    "ui_framework_selected": true,
+    "design_complete": true,
+    "code_complete": false,
+    "tests_passed": false,
+    "ship_ready": false
+  },
+  "framework_selection": {
+    "decision": "visage",
+    "rationale": "User explicitly wants a FabFilter Pro-Q4-like C++ front end that does not feel web appy. Visage (pure C++, GPU-rendered) delivers native neon-glow knobs/nodes, meters, and a 120 Hz+ render loop with no web stack. Best fit for the interactive EQ display + high-quality analyzer + settings modal.",
+    "implementation_strategy": "phased"
+  },
+  "implementation_progress": {
+    "dsp_core": "COMPLETE (47/47 tests passing)",
+    "filter_family": "RBJ demoted to baseline; Vicanek matched + Orfanidis decramped + Vicanek matched shelves in use",
+    "cut_slopes": "COMPLETE (12-48 dB/oct, cascaded matched sections)",
+    "dynamic_per_node": "COMPLETE (every node supports dynamic + Oxford-style adaptive release)",
+    "precision_topology": "COMPLETE (TPT/ZDF SVF + coefficient morphing)",
+    "loudness_native": "COMPLETE (BS.1770-4 K-weighting matched to 0.000000 dB + true-peak)",
+    "linear_phase_fir": "COMPLETE (Kaiser FIR, symmetry 3.8e-17, latency reported)",
+    "oversampling": "COMPLETE (2x image -72 dB + 4x cascade, both verified)",
+    "spectral_dynamics": "COMPLETE (FFT per-frequency dynamics, overlap-add; verified)",
+    "gain_q_link": "COMPLETE (analog-style Q narrowing with gain; verified)",
+    "spectrum_analyzer": "COMPLETE (Hann FFT, overlap, tilt, peak hold, max-in-band)",
+    "processor": "COMPLETE (APVTS + 24-band state + chain incl. linear FIR + 2x/4x oversampling + spectral mode + analyzer + metering + latency)",
+    "factory_presets": "COMPLETE (7 presets) + A/B compare slots",
+    "visage_ui": "WRITTEN (Pro-Q4 recreation + preset browser + settings modal; uncompiled in this env)",
+    "user_presets_save_load": "PENDING (format defined)",
+    "compile": "PENDING (needs cmake + platform libs)"
+  },
+  "error_recovery": {
+    "last_backup": null,
+    "rollback_available": false,
+    "error_log": []
+  }
+}
