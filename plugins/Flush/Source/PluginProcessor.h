@@ -129,6 +129,7 @@ private:
 
     void buildBand (int index, const juce::ValueTree& b, double sampleRate, bool natural);
     void refreshBands (double sampleRate);
+    void ensureBandCount();               // normalize BANDS child count to kMaxBands
     void publishUiSnapshot (double sampleRate);
     double processBandChannel (std::vector<flush::MorphingBiquad>& sections, double in);
     double processBandSv (std::vector<flush::SvFilter>& sections, double in);
@@ -147,6 +148,17 @@ private:
     int phaseMode() const;               // 0 low-latency, 1 natural, 2 linear
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void updateLatency();
+
+    // Null-safe parameter readers. `getRawParameterValue(id)` returns nullptr if
+    // the ID is unknown (a typo or a stale state) — dereferencing that is a
+    // guaranteed crash. These return the fallback instead, and jassert in debug
+    // so the bug is still visible during development.
+    float* rawParam (const juce::String& id);
+    float  paramF (const juce::String& id, float fallback = 0.0f);
+    int    paramI (const juce::String& id, int fallback = 0);
+    bool   paramB (const juce::String& id, bool fallback = false);
+    void   validateParameterIds();       // jasserts every expected ID exists
+    float paramFallback_ = 0.0f;
 
     std::array<BandRuntime, kMaxBands> bands_;
     std::atomic<bool> bandsDirty_ { true };

@@ -68,6 +68,7 @@ public:
 
     void draw (visage::Canvas& canvas) override
     {
+        if (width() < 4.0f || height() < 4.0f) return;   // not yet laid out
         const float cx = width() * 0.5f;
         const float cy = width() * 0.5f;
         const float r  = width() * 0.40f;
@@ -165,6 +166,7 @@ public:
 private:
     void drawBar (visage::Canvas& canvas, double db)
     {
+        if (width() < 12.0f || height() < 30.0f) return;   // not yet laid out
         const float x = 4.0f, w = width() - 8.0f;
         const float h = height() - 24.0f;
         const float y0 = 2.0f;
@@ -253,6 +255,7 @@ public:
 
     void draw (visage::Canvas& canvas) override
     {
+        if (width() < 12.0f || height() < 30.0f) return;   // not yet laid out
         const float x = 4.0f, w = width() - 8.0f;
         const float y0 = 2.0f, h = height() - 24.0f;
 
@@ -343,6 +346,11 @@ public:
 
     void draw (visage::Canvas& canvas) override
     {
+        // Degenerate geometry guard: an editor that hasn't been sized yet (or a
+        // zero-height host window) must not divide by zero below.
+        if (width() < 44.0f || height() < 30.0f)
+            return;
+
         // Plot area (leave margins for axis labels).
         const float px = 34.0f, py = 8.0f;
         const float pw = width() - px - 10.0f;
@@ -355,19 +363,21 @@ public:
         if (*processor_.parameters.getRawParameterValue ("analyzer_on") > 0.5f) {
             const auto& mags = processor_.analyzerMagnitudes();
             const int N = (int)mags.size();
-            const float colW = pw / N;
-            const float rangeDb = { 60.0f, 90.0f, 120.0f }[(int)*processor_.parameters.getRawParameterValue ("analyzer_range")];
-            for (int i = 0; i < N; ++i) {
-                const float lvl = clamp (mags[i] / rangeDb + 1.0f, 0.0f, 1.0f);
-                const float colH = ph * lvl;
-                if (colH < 0.5f) continue;
-                // Column alpha fades toward the top (cheap "gradient").
-                const unsigned int a = (unsigned int)(0x60 + 0x80 * lvl);
-                canvas.setColor ((a << 24) | (C::accent & 0x00ffffff));
-                canvas.rectangle (px + i * colW, py + ph - colH, std::max (1.0f, colW - 0.5f), colH);
-                // Bright 2 px top edge (Pro-Q-style peak "hairline").
-                canvas.setColor (C::accentSoft);
-                canvas.rectangle (px + i * colW, py + ph - colH, std::max (1.0f, colW - 0.5f), 2.0f);
+            if (N > 0) {
+                const float colW = pw / N;
+                const float rangeDb = { 60.0f, 90.0f, 120.0f }[(int)*processor_.parameters.getRawParameterValue ("analyzer_range")];
+                for (int i = 0; i < N; ++i) {
+                    const float lvl = clamp (mags[i] / rangeDb + 1.0f, 0.0f, 1.0f);
+                    const float colH = ph * lvl;
+                    if (colH < 0.5f) continue;
+                    // Column alpha fades toward the top (cheap "gradient").
+                    const unsigned int a = (unsigned int)(0x60 + 0x80 * lvl);
+                    canvas.setColor ((a << 24) | (C::accent & 0x00ffffff));
+                    canvas.rectangle (px + i * colW, py + ph - colH, std::max (1.0f, colW - 0.5f), colH);
+                    // Bright 2 px top edge (Pro-Q-style peak "hairline").
+                    canvas.setColor (C::accentSoft);
+                    canvas.rectangle (px + i * colW, py + ph - colH, std::max (1.0f, colW - 0.5f), 2.0f);
+                }
             }
         }
 
@@ -433,7 +443,7 @@ public:
 
     void mouseDrag (const visage::MouseEvent& e) override
     {
-        if (!dragging_ || selected_ < 0) return;
+        if (!dragging_ || selected_ < 0 || width() < 45.0f) return;
         const float dx = e.position.x - lastDrag_.x;
         const float dy = e.position.y - lastDrag_.y;
         lastDrag_ = e.position;
@@ -460,6 +470,7 @@ public:
 private:
     int hitTest (float x, float y)
     {
+        if (width() < 44.0f || height() < 30.0f) return -1;
         const float px = 34.0f, py = 8.0f;
         const float pw = width() - px - 10.0f;
         const float ph = height() - py - 22.0f;
@@ -522,7 +533,7 @@ public:
             ? names[current_] : juce::String ("Init");
         canvas.setColor (C::text);
         canvas.text (name.toRawUTF8(), value_font_, visage::Font::kTopLeft,
-                     66.0f, 15.0f, std::min (220.0f, width() - 300.0f), 15.0f);
+                     66.0f, 15.0f, std::max (40.0f, std::min (220.0f, width() - 300.0f)), 15.0f);
 
         const float abX = width() - 110.0f;
         drawAb (canvas, abX, 5.0f, "A", abSlot_ == 0);

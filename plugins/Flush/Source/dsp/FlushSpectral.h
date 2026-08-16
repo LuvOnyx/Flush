@@ -34,7 +34,11 @@ class SpectralDynamics
 public:
     void reset (double fs, int fftSize = 2048)
     {
-        fs_ = fs;
+        // Force the FFT size to a power of two >= 256 — the radix-2 FFT is
+        // undefined on other sizes, and N < 4 would make hop_ == 0 (infinite
+        // loop / out-of-bounds).
+        fftSize = std::max (256, nextPow2 (fftSize));
+        fs_ = (fs > 0.0) ? fs : 48000.0;
         N_ = fftSize;
         hop_ = N_ / 4;                        // 75% overlap
         latency_ = N_ - hop_;
@@ -59,13 +63,26 @@ public:
         applyParams();
     }
 
-    void setParams (const SpectralParams& p) { p_ = p; applyParams(); }
+    void setParams (const SpectralParams& p)
+    {
+        p_ = p;
+        // Clamp hostile values (broken presets/automation) so the per-frame
+        // coefficient math and gain computer stay finite.
+        p_.attackSec  = std::max (0.0001, sanitize (p.attackSec));
+        p_.releaseSec = std::max (0.001,  sanitize (p.releaseSec));
+        p_.ratio      = std::max (1.0,    sanitize (p.ratio));
+        p_.kneeDb     = std::max (0.0,    sanitize (p.kneeDb));
+        p_.rangeDb    = std::max (0.0,    sanitize (p.rangeDb));
+        p_.thresholdDb = sanitize (p.thresholdDb);
+        applyParams();
+    }
 
     // Process n samples in place (buffered internally for any block size).
     void process (double* io, int n)
     {
+        if (io == nullptr || n <= 0) return;
         for (int i = 0; i < n; ++i) {
-            inAcc_[inCount_++] = io[i];
+            inAcc_[inCount_++] = sanitize (io[i]);
             if (inCount_ == hop_) {
                 pushFrame();
                 inCount_ = 0;

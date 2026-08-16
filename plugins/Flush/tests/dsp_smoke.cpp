@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cmath>
 #include <string>
+#include <limits>
 #include <functional>
 #include <vector>
 
@@ -750,6 +751,60 @@ int main() {
         const double lpLow = measureGainDb (procLp, fs, 200.0);
         CHECK("SVF HighCut passes lows (~0 dB @ fc/5)", std::fabs (lpLow) < 0.5,
               ("measured " + std::to_string(lpLow) + " dB").c_str());
+    }
+
+    // ---- 28. Bulletproofing: NaN/Inf sanitization -------------------------
+    {
+        // A NaN/Inf sample must be collapsed, not propagated into filter state.
+        Biquad b; b.setCoef (rbj::bell (fs, 1000.0, 12.0, 1.0));
+        b.process (std::nan ("")); b.process (std::numeric_limits<double>::infinity ());
+        const double out = b.process (0.1);
+        CHECK("Biquad survives NaN/Inf input (finite output)", std::isfinite (out),
+              ("out " + std::to_string(out)).c_str());
+
+        // OnePole with a zero/negative tau -> frozen, never NaN.
+        OnePole op; op.reset();
+        op.setTau (0.0, fs); op.setTau (-1.0, 0.0);
+        CHECK("OnePole survives degenerate tau", std::isfinite (op.update (1.0)),
+              "no NaN from exp(-inf)");
+    }
+
+    // ---- 29. Bulletproofing: FFT refuses non-power-of-2 -------------------
+    {
+        // The old heap-corruption bug: radix-2 FFT on a non-power-of-2 length.
+        // The guard must make it a no-op instead of writing out of bounds.
+        std::vector<Complex> x (10, {1.0, 0.0});
+        fft (x.data(), 10, false);            // 10 is not a power of two
+        bool intact = true;
+        for (int i = 0; i < 10; ++i) if (x[i].re != 1.0 || x[i].im != 0.0) intact = false;
+        CHECK("FFT on non-power-of-2 length is a safe no-op", intact,
+              "buffer untouched");
+        fft (nullptr, 1024, false);           // null pointer -> no-op (no crash)
+        CHECK("FFT null pointer is a safe no-op", true, "no crash");
+    }
+
+    // ---- 30. Bulletproofing: clampQ / clampFc guards ----------------------
+    {
+        CHECK("clampQ rejects zero (division-by-zero guard)",
+              clampQ (0.0) >= 1e-3 && std::isfinite (clampQ (0.0)),
+              ("clamped to " + std::to_string(clampQ (0.0))).c_str());
+        CHECK("clampQ rejects huge (pole overflow guard)",
+              std::isfinite (clampQ (1e9)), "no overflow");
+        CHECK("clampFc rejects Nyquist+ (tan(pi/2)=inf guard)",
+              std::isfinite (std::tan (kPi * clampFc (48000.0, 48000.0) / 48000.0)),
+              "fc clamped below Nyquist");
+        CHECK("matched bell survives Q=0 (was potential NaN)",
+              std::isfinite (magnitude (matched::bell (fs, 1000.0, 6.0, 0.0), 1.0)),
+              "finite coefficients");
+    }
+
+    // ---- 31. Bulletproofing: kaiserWindow degenerate sizes ----------------
+    {
+        auto w1 = kaiserWindow (1, 6.0);
+        auto w0 = kaiserWindow (0, 6.0);
+        CHECK("kaiserWindow(1) = {1.0} (no div-by-zero)", w1.size() == 1 && w1[0] == 1.0,
+              "single tap");
+        CHECK("kaiserWindow(0) = empty", w0.empty(), "empty");
     }
 
     std::printf("\n%s — %d failure(s)\n", g_failures ? "FAILED" : "ALL PASSED", g_failures);

@@ -49,15 +49,16 @@ public:
         const double alpha[3] = { 0.985, 0.95, 0.85 };
         alpha_ = alpha[std::max (0, std::min (2, s))];
     }
-    void setTilt (double dBOct)   { tiltDbOct_ = dBOct; }
-    void setRange (double dB)     { rangeDb_ = dB; }
+    void setTilt (double dBOct)   { tiltDbOct_ = std::max (0.0, std::min (12.0, sanitize (dBOct))); }
+    void setRange (double dB)     { rangeDb_ = std::max (30.0, std::min (120.0, sanitize (dB))); }
     void setFreeze (bool f)       { frozen_ = f; }
 
     // Feed mono samples (mix of L/R); FFT + average happen internally.
     void process (const double* mono, int n)
     {
+        if (mono == nullptr || n <= 0) return;
         for (int i = 0; i < n; ++i) {
-            buf_[write_++] = mono[i];
+            buf_[write_++] = sanitize (mono[i]);
             if (write_ == fftSize_) {
                 analyze ();
                 // Shift by the hop (75% overlap with the previous window).

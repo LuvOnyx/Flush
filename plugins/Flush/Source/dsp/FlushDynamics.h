@@ -45,11 +45,22 @@ public:
 
     void setParams(const DynamicsParams& p) {
         p_ = p;
+        // Clamp hostile values (broken presets/automation) so the coefficient
+        // math can never produce NaN/Inf or an inaudible/infinite time constant.
+        p_.attackSec  = std::max(0.0001, sanitize(p.attackSec));
+        p_.releaseSec = std::max(0.001,  sanitize(p.releaseSec));
+        p_.ratio      = std::max(1.0,    sanitize(p.ratio));
+        p_.kneeDb     = std::max(0.0,    sanitize(p.kneeDb));
+        p_.rangeDb    = std::max(0.0,    sanitize(p.rangeDb));
+        p_.thresholdDb = sanitize(p.thresholdDb);
+        p_.adaptiveAmount = std::max(0.0, sanitize(p.adaptiveAmount));
         applyParams();
     }
 
     // Advance one sidechain sample; return the gain reduction in dB (>= 0).
     double processGrDb(double sideSample) {
+        sideSample = sanitize (sideSample);
+
         // 1) detector
         double level;
         if (p_.rms) {
@@ -103,6 +114,8 @@ private:
         if (sr_ > 0.0) {
             atkCoeff_ = 1.0 - std::exp(-1.0 / (p_.attackSec * sr_));
             relCoeff_ = 1.0 - std::exp(-1.0 / (p_.releaseSec * sr_));
+            atkCoeff_ = sanitize(atkCoeff_);
+            relCoeff_ = sanitize(relCoeff_);
         }
         if (p_.rms) rms_.setTau(std::max(0.0005, p_.attackSec), sr_);
         grSmooth_.setTau(0.050, sr_);   // meter smoothing (50 ms)

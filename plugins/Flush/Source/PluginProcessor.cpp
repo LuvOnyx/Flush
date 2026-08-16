@@ -58,6 +58,7 @@ FlushAudioProcessor::FlushAudioProcessor()
     }
 
     bandsDirty_.store (true);
+    validateParameterIds();
 }
 
 FlushAudioProcessor::~FlushAudioProcessor() = default;
@@ -177,8 +178,12 @@ void FlushAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     juce::ignoreUnused (samplesPerBlock);
     sampleRate_ = sampleRate;
 
+    // Guard degenerate host reports so the DSP never divides by zero.
+    if (!(sampleRate > 0.0)) sampleRate = 44100.0;
+    if (samplesPerBlock <= 0) samplesPerBlock = 512;
+
     // Oversampling sets the internal processing rate: 1x / 2x / 4x (EQ section).
-    oversampleMode_ = (int)*parameters.getRawParameterValue ("eq_oversample");   // 0/1/2
+    oversampleMode_ = juce::jlimit (0, 2, paramI ("eq_oversample"));   // 0/1/2
     procRate_ = sampleRate * (double)(1 << oversampleMode_);
 
     inputGainSmooth_.setTau (0.005, sampleRate);
@@ -186,15 +191,15 @@ void FlushAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
     compressor_.reset (sampleRate);
     flushMatch_.reset (sampleRate);
-    flushMatch_.setTiming ((int)*parameters.getRawParameterValue ("flush_speed"));
+    flushMatch_.setTiming (paramI ("flush_speed"));
 
     tpInL_.reset (sampleRate); tpInR_.reset (sampleRate);
     tpOutL_.reset (sampleRate); tpOutR_.reset (sampleRate);
 
     analyzer_.reset (sampleRate);
-    analyzer_.setSpeed ((int)*parameters.getRawParameterValue ("analyzer_speed"));
-    analyzer_.setTilt ((double)*parameters.getRawParameterValue ("analyzer_tilt"));
-    analyzer_.setRange ({ 60.0, 90.0, 120.0 }[(int)*parameters.getRawParameterValue ("analyzer_range")]);
+    analyzer_.setSpeed (paramI ("analyzer_speed", 1));
+    analyzer_.setTilt ((double)paramF ("analyzer_tilt", 4.5f));
+    analyzer_.setRange ({ 60.0, 90.0, 120.0 }[juce::jlimit (0, 2, paramI ("analyzer_range", 1))]);
     analyzerScratch_.resize (samplesPerBlock);
 
     osM_.reset (sampleRate);
@@ -233,7 +238,56 @@ bool FlushAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) co
 //==============================================================================
 int FlushAudioProcessor::phaseMode() const
 {
-    return (int)*parameters.getRawParameterValue ("eq_phase_mode");
+    // Const-safe null-guarded read (the ID is validated at construction, but a
+    // defensive nullptr check costs nothing and can't deref a missing param).
+    auto* p = parameters.getRawParameterValue ("eq_phase_mode");
+    return p ? juce::jlimit (0, 2, (int)p->load()) : 0;
+}
+
+float* FlushAudioProcessor::rawParam (const juce::String& id)
+{
+    auto* p = parameters.getRawParameterValue (id);
+    jassert (p != nullptr);                       // unknown ID -> visible in debug
+    return p ? p : &paramFallback_;
+}
+
+float FlushAudioProcessor::paramF (const juce::String& id, float fallback)
+{
+    auto* p = parameters.getRawParameterValue (id);
+    jassert (p != nullptr);
+    return p ? p->load() : fallback;
+}
+
+int FlushAudioProcessor::paramI (const juce::String& id, int fallback)
+{
+    auto* p = parameters.getRawParameterValue (id);
+    jassert (p != nullptr);
+    return p ? (int)p->load() : fallback;
+}
+
+bool FlushAudioProcessor::paramB (const juce::String& id, bool fallback)
+{
+    auto* p = parameters.getRawParameterValue (id);
+    jassert (p != nullptr);
+    return p ? (p->load() > 0.5f) : fallback;
+}
+
+void FlushAudioProcessor::validateParameterIds()
+{
+    // jasserts every parameter ID the audio path depends on exists. A typo here
+    // becomes a hard failure in debug builds instead of a null-deref crash in
+    // release. Called once from the constructor.
+    static constexpr const char* ids[] = {
+        "input_gain", "output_gain", "flush_mode", "flush_speed", "flush_reference",
+        "match_target", "eq_enabled", "eq_phase_mode", "eq_linear_quality",
+        "eq_oversample", "eq_scale", "eq_gain_q_link", "eq_phase_invert", "eq_piano",
+        "comp_enabled", "comp_mode", "comp_threshold", "comp_ratio", "comp_attack",
+        "comp_release", "comp_detector", "comp_makeup", "comp_auto_makeup",
+        "meter_mode", "analyzer_on", "analyzer_speed", "analyzer_range",
+        "analyzer_tilt", "analyzer_freeze", "ui_scale", "fps_mode", "theme_accent"
+    };
+    for (auto* id : ids)
+        jassert (parameters.getParameter (juce::String (id)) != nullptr);
 }
 
 void FlushAudioProcessor::updateLatency()
@@ -254,6 +308,11 @@ void FlushAudioProcessor::updateLatency()
     if (spectralActive_)
         latencyBase += (double)spectralL_.latency();
 
+    // Clamp to a sane non-negative value (defends against any path that could
+    // produce a negative/NaN latency and confuse the host).
+    if (!(latencyBase >= 0.0) || !std::isfinite (latencyBase))
+        latencyBase = 0.0;
+
     setLatencySamples ((int)std::lround (latencyBase));
     meterLatencyMs.store ((float)(latencyBase * 1000.0 / std::max (1.0, sampleRate_)));
 }
@@ -271,14 +330,17 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
     br.slopeDbOct  = (double)b.getProperty ("slope", 12.0);
 
     // Gain-Q interaction (Pro-Q "Gain-Q Link"): bandwidth narrows as |gain| grows.
-    if (*parameters.getRawParameterValue ("eq_gain_q_link") > 0.5f)
+    if (paramB ("eq_gain_q_link", false))
         br.q = flush::gainQLinkedQ (br.q, br.gainDb);
+
+    // Clamp every band property read from state: a malformed preset / old state
+    // file must degrade gracefully, never produce NaN/Inf or out-of-range DSP.
     br.dynamic     = (bool)b.getProperty ("dynamic", false);
-    br.dynThresholdDb = (double)b.getProperty ("dynThr", -24.0);
-    br.dynRangeDb  = (double)b.getProperty ("dynRange", 12.0);
-    br.dynAttackSec = (double)b.getProperty ("dynAtk", 0.010);
-    br.dynReleaseSec = (double)b.getProperty ("dynRel", 0.150);
-    br.channel     = (int)b.getProperty ("channel", 0);
+    br.dynThresholdDb = std::max (-120.0, std::min (0.0,   (double)b.getProperty ("dynThr", -24.0)));
+    br.dynRangeDb  = std::max (0.0,    std::min (60.0,  (double)b.getProperty ("dynRange", 12.0)));
+    br.dynAttackSec = std::max (0.0001, std::min (1.0,   (double)b.getProperty ("dynAtk", 0.010)));
+    br.dynReleaseSec = std::max (0.001,  std::min (5.0,   (double)b.getProperty ("dynRel", 0.150)));
+    br.channel     = juce::jlimit (0, 2, (int)b.getProperty ("channel", 0));
     br.solo        = (bool)b.getProperty ("solo", false);
 
     br.sectionsM.clear();
@@ -287,6 +349,17 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
     br.svfS.clear();
     br.useSvf = false;
     br.coefs.clear();
+
+    // Real-time safety: a band is at most 4 sections (12-48 dB/oct cuts) or 1
+    // (every other shape). Reserving that upper bound means the FIRST build (in
+    // prepareToPlay, off the audio thread) allocates once, and subsequent
+    // rebuilds triggered by UI node drags reuse the capacity — allocation-free
+    // on the audio thread.
+    br.sectionsM.reserve (4);
+    br.sectionsS.reserve (4);
+    br.svfM.reserve (4);
+    br.svfS.reserve (4);
+    br.coefs.reserve (4);
 
     const double fs = sampleRate, f0 = br.freq, gain = br.gainDb, Q = br.q;
 
@@ -524,37 +597,47 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const int totalIn  = getTotalNumInputChannels();
     const int totalOut = getTotalNumOutputChannels();
 
+    // Channel edge cases: no outputs -> nothing to do; no inputs -> output
+    // silence and leave (so getWritePointer is never called with an invalid
+    // index or on an empty bus).
+    if (totalOut <= 0)
+        return;
+    if (totalIn <= 0) {
+        buffer.clear();
+        return;
+    }
     for (int i = totalIn; i < totalOut; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
     if (buffer.getNumSamples() == 0)
         return;
 
-    // --- parameter snapshot -------------------------------------------------
-    const bool   eqOn      = *parameters.getRawParameterValue ("eq_enabled") > 0.5f;
-    const bool   compOn    = *parameters.getRawParameterValue ("comp_enabled") > 0.5f;
-    const bool   invert    = *parameters.getRawParameterValue ("eq_phase_invert") > 0.5f;
-    const float  inGainDb  = *parameters.getRawParameterValue ("input_gain");
-    const float  outGainDb = *parameters.getRawParameterValue ("output_gain");
-    const int    compDet   = (int)*parameters.getRawParameterValue ("comp_detector");
-    const bool   autoMk    = *parameters.getRawParameterValue ("comp_auto_makeup") > 0.5f;
-    const float  compMk    = *parameters.getRawParameterValue ("comp_makeup");
-    const int    flushMode = (int)*parameters.getRawParameterValue ("flush_mode");
-    const int    flushRef  = (int)*parameters.getRawParameterValue ("flush_reference");
-    const int    flushSpd  = (int)*parameters.getRawParameterValue ("flush_speed");
-    const float  targetDb  = *parameters.getRawParameterValue ("match_target");
+    // --- parameter snapshot (null-safe: an unknown ID yields a sane fallback,
+    //    never a crash) ------------------------------------------------------
+    const bool   eqOn      = paramB ("eq_enabled", true);
+    const bool   compOn    = paramB ("comp_enabled", true);
+    const bool   invert    = paramB ("eq_phase_invert", false);
+    const float  inGainDb  = paramF ("input_gain");
+    const float  outGainDb = paramF ("output_gain");
+    const int    compDet   = paramI ("comp_detector");
+    const bool   autoMk    = paramB ("comp_auto_makeup", true);
+    const float  compMk    = paramF ("comp_makeup");
+    const int    flushMode = paramI ("flush_mode", 1);
+    const int    flushRef  = paramI ("flush_reference");
+    const int    flushSpd  = paramI ("flush_speed");
+    const float  targetDb  = paramF ("match_target", -18.0f);
 
     // Spectral dynamics active this block — computed EARLY so updateLatency()
     // reports the correct overlap-add latency without a one-block lag when the
     // comp mode is toggled.
-    spectralActive_ = compOn && ((int)*parameters.getRawParameterValue ("comp_mode") == 1);
+    spectralActive_ = compOn && (paramI ("comp_mode") == 1);
 
     // --- phase mode / oversampling / band rebuild ---------------------------
     linearActive_ = (phaseMode() == 2);
 
     // Linear-phase FIR quality (latency/accuracy trade-off), Pro-Q style:
     // Low/Medium/High/Max -> FIR length -> group delay.
-    const int firQuality = (int)*parameters.getRawParameterValue ("eq_linear_quality");
+    const int firQuality = paramI ("eq_linear_quality", 1);
     if (firQuality != lastFirQuality_) {
         static constexpr int kFirLengths[4] = { 511, 1023, 2047, 4095 };
         firLength_ = kFirLengths[juce::jlimit (0, 3, firQuality)];
@@ -562,7 +645,7 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         linearFirDirty_.store (true);
     }
 
-    const int oversampleNow = (int)*parameters.getRawParameterValue ("eq_oversample");  // 0/1/2
+    const int oversampleNow = juce::jlimit (0, 2, paramI ("eq_oversample"));  // 0/1/2
     if (oversampleNow != oversampleMode_ || phaseMode() != lastPhaseMode_) {
         oversampleMode_ = oversampleNow;
         procRate_ = sampleRate_ * (1 << oversampleMode_);
@@ -583,29 +666,29 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     updateLatency();
 
     // --- analyzer configuration (display only, runtime-changeable) ----------
-    if (*parameters.getRawParameterValue ("analyzer_on") > 0.5f) {
-        analyzer_.setSpeed ((int)*parameters.getRawParameterValue ("analyzer_speed"));
-        analyzer_.setTilt ((double)*parameters.getRawParameterValue ("analyzer_tilt"));
-        analyzer_.setFreeze (*parameters.getRawParameterValue ("analyzer_freeze") > 0.5f);
+    if (paramB ("analyzer_on", true)) {
+        analyzer_.setSpeed (paramI ("analyzer_speed", 1));
+        analyzer_.setTilt ((double)paramF ("analyzer_tilt", 4.5f));
+        analyzer_.setFreeze (paramB ("analyzer_freeze", false));
     }
 
     // --- compressor / spectral dynamics (shared threshold/ratio/attack/release) ---
     if (spectralActive_) {
         flush::SpectralParams sp;
-        sp.thresholdDb = *parameters.getRawParameterValue ("comp_threshold");
-        sp.ratio       = *parameters.getRawParameterValue ("comp_ratio");
+        sp.thresholdDb = paramF ("comp_threshold", -18.0f);
+        sp.ratio       = paramF ("comp_ratio", 4.0f);
         sp.rangeDb     = 24.0;
-        sp.attackSec   = *parameters.getRawParameterValue ("comp_attack") / 1000.0;
-        sp.releaseSec  = *parameters.getRawParameterValue ("comp_release") / 1000.0;
+        sp.attackSec   = paramF ("comp_attack", 10.0f) / 1000.0;
+        sp.releaseSec  = paramF ("comp_release", 150.0f) / 1000.0;
         sp.kneeDb      = 6.0;
         spectralL_.setParams (sp);
         spectralR_.setParams (sp);
     } else {
         flush::DynamicsParams p;
-        p.thresholdDb = *parameters.getRawParameterValue ("comp_threshold");
-        p.ratio       = *parameters.getRawParameterValue ("comp_ratio");
-        p.attackSec   = *parameters.getRawParameterValue ("comp_attack") / 1000.0;
-        p.releaseSec  = *parameters.getRawParameterValue ("comp_release") / 1000.0;
+        p.thresholdDb = paramF ("comp_threshold", -18.0f);
+        p.ratio       = paramF ("comp_ratio", 4.0f);
+        p.attackSec   = paramF ("comp_attack", 10.0f) / 1000.0;
+        p.releaseSec  = paramF ("comp_release", 150.0f) / 1000.0;
         p.kneeDb      = 6.0;
         p.rangeDb     = 60.0;
         p.rms         = (compDet == 1);
@@ -621,8 +704,12 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     flushMatch_.setTiming (flushSpd);
 
     // --- process ------------------------------------------------------------
+    // Channel safety: guard against zero in/out buses and against output
+    // channels aliasing input channels (mono->stereo etc.).
+    const bool stereoOut = totalOut > 1;
+    const bool stereoIn  = totalIn > 1;
     auto* l = buffer.getWritePointer (0);
-    auto* r = buffer.getWritePointer (std::min (1, totalIn - 1));
+    auto* r = stereoOut ? buffer.getWritePointer (1) : l;
 
     const double targetInGain  = dbToLin (inGainDb);
     const double targetOutGain = dbToLin (outGainDb);
@@ -633,7 +720,7 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     for (int i = 0; i < buffer.getNumSamples(); ++i) {
         const double inL = (totalIn > 0) ? l[i] : 0.0;
-        const double inR = (totalIn > 1) ? r[i] : inL;   // mono -> duplicate
+        const double inR = stereoIn ? r[i] : inL;         // mono -> duplicate
 
         // Input trim (short smoothed ramp to avoid zipper).
         const double inGainLin = inputGainSmooth_.update (targetInGain);
@@ -716,8 +803,10 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         outPeak = std::max (outPeak, std::max (tpOutL_.process (L), tpOutR_.process (R)));
         outSumSq += L * L + R * R;
 
+        // Write out. Mono source -> duplicate L to both output channels; stereo
+        // source -> L/R. (r aliases l when the output is mono, which is correct.)
         l[i] = (float)L;
-        if (totalOut > 1 && totalIn > 1) r[i] = (float)R;
+        if (stereoOut) r[i] = (float)(stereoIn ? R : L);
     }
 
     const double n = buffer.getNumSamples();
@@ -744,7 +833,7 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     meterCorr.store (denom > 1e-12 ? (float)(midSideDot / denom) : 0.0f);
 
     // Feed the analyzer with this block's mono mix (display only).
-    if (*parameters.getRawParameterValue ("analyzer_on") > 0.5f)
+    if (paramB ("analyzer_on", true))
         analyzer_.process (analyzerScratch_.data(), buffer.getNumSamples());
 }
 
@@ -780,32 +869,59 @@ void FlushAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void FlushAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
-    if (xml == nullptr) return;
+    // Hosts pass arbitrary bytes; malformed/corrupt data must never throw into
+    // the message thread. Wrap the whole restore defensively.
+    try {
+        std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
+        if (xml == nullptr) return;
 
-    auto state = juce::ValueTree::fromXml (*xml);
-    if (! state.isValid()) return;
+        auto state = juce::ValueTree::fromXml (*xml);
+        if (! state.isValid()) return;
 
-    // Split off the band tree before replacing parameter state.
-    auto bands = state.getChildWithName ("BANDS");
-    if (bands.isValid()) {
-        bandTree.copyPropertiesAndChildrenFrom (bands, nullptr);
-        state.removeChild (bands, nullptr);
-        bandsDirty_.store (true);
+        // Split off the band tree before replacing parameter state.
+        auto bands = state.getChildWithName ("BANDS");
+        if (bands.isValid()) {
+            bandTree.copyPropertiesAndChildrenFrom (bands, nullptr);
+            state.removeChild (bands, nullptr);
+            bandsDirty_.store (true);
+        }
+        parameters.replaceState (state);
+        ensureBandCount();
+    } catch (...) {
+        // Intentionally swallow: a bad preset file must not crash the host.
     }
-    parameters.replaceState (state);
+}
+
+void FlushAudioProcessor::ensureBandCount()
+{
+    // The audio path assumes exactly kMaxBands children; a truncated state file
+    // (or hand-edited preset) could otherwise make getChild(i) invalid and crash
+    // the next buildBand(). Pad or trim defensively.
+    while (bandTree.getNumChildren() < kMaxBands) {
+        juce::ValueTree b ("BAND");
+        b.setProperty ("id", bandTree.getNumChildren(), nullptr);
+        b.setProperty ("enabled", false, nullptr);
+        bandTree.appendChild (b, nullptr);
+    }
+    while (bandTree.getNumChildren() > kMaxBands)
+        bandTree.removeChild (bandTree.getNumChildren() - 1, nullptr);
 }
 
 //==============================================================================
 juce::ValueTree FlushAudioProcessor::getBand (int index) const
 {
+    // Bounds-guard the UI's band access; an out-of-range index yields an
+    // invalid tree (callers handle it) instead of a crash.
+    if (index < 0 || index >= bandTree.getNumChildren())
+        return {};
     return bandTree.getChild (index);
 }
 
 int FlushAudioProcessor::numActiveBands() const
 {
     int n = 0;
-    for (int i = 0; i < kMaxBands; ++i)
+    const int count = juce::jmin (kMaxBands, bandTree.getNumChildren());
+    for (int i = 0; i < count; ++i)
         if ((bool)bandTree.getChild (i).getProperty ("enabled", false)) ++n;
     return n;
 }
@@ -919,6 +1035,7 @@ void FlushAudioProcessor::loadFactoryPreset (int index)
     }
 
     markBandsDirty();
+    ensureBandCount();
 }
 
 void FlushAudioProcessor::storeAbSlot (int slot)
@@ -943,4 +1060,5 @@ void FlushAudioProcessor::recallAbSlot (int slot)
     }
     parameters.replaceState (state);
     markBandsDirty();
+    ensureBandCount();
 }

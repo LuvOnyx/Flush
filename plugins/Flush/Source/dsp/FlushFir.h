@@ -30,7 +30,10 @@ inline double besselI0 (double x)
 
 inline std::vector<double> kaiserWindow (int n, double beta)
 {
-    const double denom = besselI0 (beta);
+    if (n <= 0) return {};
+    if (n == 1) return { 1.0 };                        // avoids division by (n-1)
+
+    const double denom = std::max (1e-300, besselI0 (beta));
     std::vector<double> w (n);
     for (int i = 0; i < n; ++i) {
         const double t = 2.0 * i / (n - 1) - 1.0;      // -1 .. +1
@@ -42,8 +45,11 @@ inline std::vector<double> kaiserWindow (int n, double beta)
 // Windowed-sinc lowpass FIR (used by the oversampler). Normalized to unit DC gain.
 inline std::vector<double> windowedSincLowpass (double fs, double fc, int length, double beta = 6.0)
 {
+    if (length <= 0 || fs <= 0.0) return { 1.0 };
+
+    // Clamp the normalized cutoff into (0, 1) so the sinc never degenerates.
+    const double fcNorm = std::max (1e-3, std::min (0.999, 2.0 * fc / fs));
     const int M = (length - 1) / 2;
-    const double fcNorm = 2.0 * fc / fs;               // cutoff in cycles/sample
     std::vector<double> h (length);
     const auto win = kaiserWindow (length, beta);
     double sum = 0.0;
@@ -54,7 +60,10 @@ inline std::vector<double> windowedSincLowpass (double fs, double fc, int length
         h[n] *= win[n];
         sum += h[n];
     }
-    for (auto& x : h) x /= sum;                        // unit DC gain
+    if (std::fabs (sum) > 1e-12)
+        for (auto& x : h) x /= sum;                    // unit DC gain (guarded)
+    else
+        h.assign (length, 0.0), h[M] = 1.0;            // degenerate -> passthrough
     return h;
 }
 
@@ -68,6 +77,12 @@ inline std::vector<double> windowedSincLowpass (double fs, double fc, int length
 inline std::vector<double> designLinearPhaseFir (
     const std::function<double(double)>& mag, double fs, int length, double beta = 6.0)
 {
+    // Force an odd length (linear phase requires a center tap); guard degenerate
+    // sizes and sample rates.
+    if (length <= 0) length = 1;
+    if ((length & 1) == 0) ++length;
+    if (fs <= 0.0) fs = 48000.0;
+
     const int M = (length - 1) / 2;
     std::vector<double> h (length, 0.0);
 
@@ -76,7 +91,7 @@ inline std::vector<double> designLinearPhaseFir (
         for (int k = 0; k < length; ++k) {
             const double f = (k <= length / 2) ? (double)k * fs / length
                                                : (double)(k - length) * fs / length;
-            acc += mag (std::fabs (f)) * std::cos (2.0 * kPi * k * (n - M) / length);
+            acc += sanitize (mag (std::fabs (f))) * std::cos (2.0 * kPi * k * (n - M) / length);
         }
         h[n] = acc / length;
     }
@@ -87,8 +102,9 @@ inline std::vector<double> designLinearPhaseFir (
 
     // Normalize to the exact requested DC magnitude (guards: skip if DC ~ 0).
     if (std::fabs (dc) > 1e-6) {
-        const double norm = mag (0.0) / dc;
-        for (auto& x : h) x *= norm;
+        const double norm = sanitize (mag (0.0)) / dc;
+        if (std::isfinite (norm))
+            for (auto& x : h) x *= norm;
     }
     return h;
 }
@@ -103,17 +119,19 @@ struct FirFilter
     void set (const std::vector<double>& coeffs)
     {
         h = coeffs;
+        // A zero-length filter is a passthrough with a 1-slot buffer (never
+        // lets `pos` exceed the buffer).
         buf.assign (coeffs.empty() ? 1 : coeffs.size(), 0.0);
         pos = 0;
     }
 
     void reset() { std::fill (buf.begin(), buf.end(), 0.0); pos = 0; }
-    int latency() const { return ((int)h.size() - 1) / 2; }   // group delay (samples)
+    int latency() const { return (int)h.empty() ? 0 : (((int)h.size() - 1) / 2); }
 
     double process (double x)
     {
-        if (h.empty()) return x;
-        buf[pos] = x;
+        if (h.empty()) return sanitize (x);
+        buf[pos] = sanitize (x);
         double y = 0.0;
         const int L = (int)h.size();
         for (int i = 0; i < L; ++i)

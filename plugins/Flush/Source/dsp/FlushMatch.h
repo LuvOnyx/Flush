@@ -43,7 +43,7 @@ public:
 
     void setMode(Mode m) { mode_ = m; }
     void setReference(Reference r) { ref_ = r; }
-    void setTargetDb(double db) { targetDb_ = db; }
+    void setTargetDb(double db) { targetDb_ = std::max(-60.0, std::min(0.0, sanitize(db))); }
 
     // 0 = Slow (Bus), 1 = Medium, 2 = Fast.
     void setTiming(int timing) {
@@ -70,7 +70,7 @@ public:
         const double inDb  = linToDb(std::sqrt(std::max(0.0, inLoud_.value())));
         const double outDb = linToDb(std::sqrt(std::max(0.0, outLoud_.value())));
         const double target = (mode_ == Mode::Target) ? targetDb_ : inDb;
-        const double delta = target - outDb;
+        const double delta = sanitize(target - outDb);
 
         // Clamp the auto-gain to a sane safety window so a mute/silence never
         // slams the output up +inf.

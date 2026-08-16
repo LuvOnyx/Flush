@@ -91,7 +91,7 @@ cd plugins/Flush/tests
 g++ -std=c++20 -O2 -I../Source/dsp dsp_smoke.cpp -o dsp_smoke && ./dsp_smoke
 ```
 
-61 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
+71 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
 LP/HP −3.01 dB @ fc, a three-way no-cramp comparison (RBJ 47% vs Vicanek 7% vs Orfanidis
 2.1%), decramped shelves vs the analog prototype, TPT/ZDF SVF, coefficient morphing,
 Oxford-style adaptive release, Flush Match (K-weighted) neutralizing a +6 dB change and
@@ -117,7 +117,7 @@ or use `scripts/build-and-install.sh -PluginName Flush` (honors `apc.config.json
 
 - [x] Concept + architecture (dream/plan) — `status.json`
 - [x] Design v2 (Pro-Q4 recreation spec) — `Design/v2-ui-spec.md`
-- [x] DSP core — written + **verified** (61/61 tests): filters, dynamics, loudness, FFT,
+- [x] DSP core — written + **verified** (71/71 tests): filters, dynamics, loudness, FFT,
       linear-phase FIR, 2x/4x oversampling, analyzer, spectral dynamics, gain-Q, SVF cuts
 - [x] JUCE processor — APVTS + 24-band state + full chain (linear FIR w/ quality tiers,
       2x/4x oversampling, spectral mode, analyzer, metering, latency) + factory presets + A/B + band solo
@@ -125,5 +125,9 @@ or use `scripts/build-and-install.sh -PluginName Flush` (honors `apc.config.json
 - [x] Hardening & polish — cut-type swap fixed (LowCut=HP/HighCut=LP), SVF cuts, const-correctness,
       per-band dynamics sample-rate fix, spectral GR metering, thread-safe UI curve snapshot,
       atomic dirty flags, latency-report ordering, knob track arc, drawn gear, toggles
+- [x] Bulletproofing — NaN/Inf sanitization on every sample path, Q/freq/param clamps,
+      FFT non-power-of-2 & null-pointer guards, channel edge cases (mono/0-in/0-out),
+      null-safe parameter reads + ID validation, band-count normalization, try/catch state
+      restore, bounded (reserve) audio-thread allocation, render geometry guards
 - [ ] User preset save/load (format defined)
 - [ ] Compile against JUCE 9 + Visage + listen/measure pass — **see HANDOFF.md**

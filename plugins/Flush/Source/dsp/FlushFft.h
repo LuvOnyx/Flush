@@ -16,8 +16,16 @@ struct Complex { double re, im; };
 
 // In-place radix-2 FFT. inverse=true computes the inverse transform WITHOUT the
 // 1/n normalization (use ifft() for a correctly-scaled inverse).
+//
+// SAFETY: a radix-2 FFT on a non-power-of-2 length is undefined behaviour (the
+// bit-reversal pass reads/writes out of bounds). Guarded here: a null pointer,
+// non-positive length, or non-power-of-2 length is a no-op. (A previous
+// non-power-of-2 FIR length caused a heap corruption before this guard.)
 inline void fft (Complex* a, int n, bool inverse)
 {
+    if (a == nullptr || n <= 0 || (n & (n - 1)) != 0)
+        return;                                        // not power-of-2 -> refuse
+
     // Bit-reversal permutation.
     for (int i = 1, j = 0; i < n; ++i) {
         int bit = n >> 1;
@@ -49,12 +57,13 @@ inline void fft (Complex* a, int n, bool inverse)
 // Correctly-scaled inverse FFT: ifft(x) = conj(fft(conj(x))) / n.
 inline void ifft (Complex* a, int n)
 {
+    if (a == nullptr || n <= 0) return;
     for (int i = 0; i < n; ++i) a[i].im = -a[i].im;
     fft (a, n, false);
     for (int i = 0; i < n; ++i) { a[i].re /= n; a[i].im = -a[i].im / n; }
 }
 
-// Next power of two >= n.
+// Next power of two >= n (n <= 0 -> 1).
 inline int nextPow2 (int n)
 {
     int p = 1;
@@ -63,8 +72,10 @@ inline int nextPow2 (int n)
 }
 
 // Hann window (periodic, normalized so a full-scale sine reads its true level).
+// n <= 0 -> empty window.
 inline std::vector<double> hannWindow (int n)
 {
+    if (n <= 0) return {};
     std::vector<double> w (n);
     for (int i = 0; i < n; ++i)
         w[i] = 0.5 * (1.0 - std::cos (2.0 * kPi * i / n));

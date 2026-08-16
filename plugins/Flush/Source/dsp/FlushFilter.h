@@ -41,7 +41,20 @@ inline double magnitude (const BiquadCoef& c, double w)
     const double nim = -(c.b1 * sw + c.b2 * s2w);
     const double dre = 1.0 + c.a1 * cw + c.a2 * c2w;
     const double dim = -(c.a1 * sw + c.a2 * s2w);
-    return std::sqrt ((nre * nre + nim * nim) / (dre * dre + dim * dim));
+    const double den = dre * dre + dim * dim;
+    return std::sqrt ((nre * nre + nim * nim) / std::max (den, 1e-30));
+}
+
+// Clamp a Q into a numerically safe band (guards division-by-zero / pole
+// overflow in the coefficient math). The processor already clamps user input;
+// this is the second line of defence against malformed presets/state.
+inline double clampQ (double Q) { return std::max (1e-3, std::min (40.0, sanitize (Q))); }
+
+// Clamp a filter frequency to (0, 0.49*fs) so tan(w0/2) can never reach inf.
+inline double clampFc (double f0, double fs)
+{
+    if (!(fs > 0.0)) fs = 48000.0;
+    return std::max (1.0, std::min (fs * 0.49, sanitize (f0)));
 }
 
 // Transposed Direct Form II — numerically robust, two state variables.
@@ -53,9 +66,10 @@ struct Biquad {
     void setCoef(const BiquadCoef& cc) { c = cc; }
 
     inline double process(double x) {
+        x = sanitize (x);
         const double y = c.b0 * x + s1;
-        s1 = c.b1 * x - c.a1 * y + s2;
-        s2 = c.b2 * x - c.a2 * y;
+        s1 = sanitize (c.b1 * x - c.a1 * y + s2);
+        s2 = sanitize (c.b2 * x - c.a2 * y);
         return y;
     }
 };
@@ -121,7 +135,7 @@ inline BiquadCoef highShelf(double fs, double f0, double gainDb, double S) {
 }
 
 inline BiquadCoef lowpass(double fs, double f0, double Q) {
-    const double w0 = 2.0 * kPi * f0 / fs;
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
     const double cw = std::cos(w0);
     const double alpha = std::sin(w0) / (2.0 * Q);
     const double a0 = 1.0 + alpha;
@@ -135,7 +149,7 @@ inline BiquadCoef lowpass(double fs, double f0, double Q) {
 }
 
 inline BiquadCoef highpass(double fs, double f0, double Q) {
-    const double w0 = 2.0 * kPi * f0 / fs;
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
     const double cw = std::cos(w0);
     const double alpha = std::sin(w0) / (2.0 * Q);
     const double a0 = 1.0 + alpha;
@@ -150,7 +164,7 @@ inline BiquadCoef highpass(double fs, double f0, double Q) {
 
 // Bandpass, constant 0 dB peak gain.
 inline BiquadCoef bandpass(double fs, double f0, double Q) {
-    const double w0 = 2.0 * kPi * f0 / fs;
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
     const double cw = std::cos(w0);
     const double alpha = std::sin(w0) / (2.0 * Q);
     const double a0 = 1.0 + alpha;
@@ -164,7 +178,7 @@ inline BiquadCoef bandpass(double fs, double f0, double Q) {
 }
 
 inline BiquadCoef notch(double fs, double f0, double Q) {
-    const double w0 = 2.0 * kPi * f0 / fs;
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
     const double cw = std::cos(w0);
     const double alpha = std::sin(w0) / (2.0 * Q);
     const double a0 = 1.0 + alpha;
@@ -178,7 +192,7 @@ inline BiquadCoef notch(double fs, double f0, double Q) {
 }
 
 inline BiquadCoef allpass(double fs, double f0, double Q) {
-    const double w0 = 2.0 * kPi * f0 / fs;
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
     const double cw = std::cos(w0);
     const double alpha = std::sin(w0) / (2.0 * Q);
     const double a0 = 1.0 + alpha;
@@ -198,13 +212,19 @@ inline BiquadCoef allpass(double fs, double f0, double Q) {
 namespace matched {
 
 // Impulse-invariance poles, Vicanek eq (12). q = 1/(2Q).
+// Q is clamped first: tiny Q -> huge q -> cosh overflow; guarded here so the
+// coefficients can never become NaN/Inf regardless of the caller.
 inline void poles(double w0, double Q, double& a1, double& a2) {
-    const double q  = 1.0 / (2.0 * Q);
-    a2 = std::exp(-2.0 * q * w0);
+    const double q  = 1.0 / (2.0 * clampQ(Q));
+    const double ew = std::exp(-q * w0);
+    a2 = ew * ew;
     if (q <= 1.0)
-        a1 = -2.0 * std::exp(-q * w0) * std::cos(std::sqrt(1.0 - q * q) * w0);
-    else
-        a1 = -2.0 * std::exp(-q * w0) * std::cosh(std::sqrt(q * q - 1.0) * w0);
+        a1 = -2.0 * ew * std::cos(std::sqrt(1.0 - q * q) * w0);
+    else {
+        // Clamp the argument so cosh cannot overflow (~+/-710 -> ~1e308).
+        const double arg = std::min (700.0, std::sqrt (q * q - 1.0) * w0);
+        a1 = -2.0 * ew * std::cosh(arg);
+    }
 }
 
 // Magnitude-squared helper quantities evaluated at w0 (Vicanek eq 26/27).
@@ -233,7 +253,7 @@ inline BiquadCoef bell(double fs, double f0, double gainDb, double Q) {
         BiquadCoef r; r.b0 = 1.0; return r;
     }
     const double G  = dbToLin(gainDb);
-    const double w0 = 2.0 * kPi * f0 / fs;
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
     double a1, a2;
     poles(w0, Q, a1, a2);
     const MagParts m = magParts(w0, a1, a2);
@@ -259,7 +279,7 @@ inline BiquadCoef bell(double fs, double f0, double gainDb, double Q) {
 
 // Matched lowpass (Vicanek 4.1). |H(f0)| = Q (=> -3.01 dB at Q = 1/sqrt(2)).
 inline BiquadCoef lowpass(double fs, double f0, double Q) {
-    const double w0 = 2.0 * kPi * f0 / fs;
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
     double a1, a2;
     poles(w0, Q, a1, a2);
     const MagParts m = magParts(w0, a1, a2);
@@ -280,7 +300,7 @@ inline BiquadCoef lowpass(double fs, double f0, double Q) {
 
 // Matched highpass (Vicanek 4.2).
 inline BiquadCoef highpass(double fs, double f0, double Q) {
-    const double w0 = 2.0 * kPi * f0 / fs;
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
     double a1, a2;
     poles(w0, Q, a1, a2);
     const MagParts m = magParts(w0, a1, a2);
@@ -298,7 +318,7 @@ inline BiquadCoef highpass(double fs, double f0, double Q) {
 
 // Matched bandpass (Vicanek 4.3), unity gain at center.
 inline BiquadCoef bandpass(double fs, double f0, double Q) {
-    const double w0 = 2.0 * kPi * f0 / fs;
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
     double a1, a2;
     poles(w0, Q, a1, a2);
     const MagParts m = magParts(w0, a1, a2);
@@ -404,8 +424,11 @@ struct SvFilter
     void set (Kind k, double fs, double fc, double Q)
     {
         kind = k;
-        g = std::tan (kPi * fc / fs);
-        kd = 1.0 / Q;
+        // Clamp frequency (tan(pi/2) = inf) and Q (1/Q divide-by-zero) so the
+        // SVF coefficients are always finite, even for hostile parameter values.
+        const double f = clampFc (fc, fs);
+        g  = std::tan (kPi * f / fs);
+        kd = 1.0 / clampQ (Q);
         a1 = 1.0 / (1.0 + g * (g + kd));
         a2 = g * a1;
         a3 = g * a2;
@@ -414,6 +437,7 @@ struct SvFilter
 
     double process (double x)
     {
+        x = sanitize (x);
         const double v3 = x - ic2eq;
         const double v1 = a1 * ic1eq + a2 * v3;
         const double v2 = ic2eq + a2 * ic1eq + a3 * v3;
@@ -421,11 +445,11 @@ struct SvFilter
         ic2eq = 2.0 * v2 - ic2eq;
 
         switch (kind) {
-            case Kind::LowPass:  return v2;
-            case Kind::BandPass: return kd * v1;            // unity gain at center
-            case Kind::HighPass: return x - kd * v1 - v2;
-            case Kind::Notch:    return x - kd * v1;         // low + high
-            default:             return x - kd * v1 - 2.0 * v2;  // all-pass
+            case Kind::LowPass:  return sanitize (v2);
+            case Kind::BandPass: return sanitize (kd * v1);          // unity gain at center
+            case Kind::HighPass: return sanitize (x - kd * v1 - v2);
+            case Kind::Notch:    return sanitize (x - kd * v1);       // low + high
+            default:             return sanitize (x - kd * v1 - 2.0 * v2);  // all-pass
         }
     }
 
@@ -470,7 +494,7 @@ struct MorphingBiquad
             active = incoming;
             morphing = false;
         }
-        return y;
+        return sanitize (y);
     }
 
     Biquad active;
@@ -545,8 +569,8 @@ inline BiquadCoef bell (double fs, double f0, double gainDb, double Q)
     }
     const double G  = dbToLin (gainDb);
     const double GB = std::sqrt (G);            // half-gain on the dB scale
-    const double w0 = 2.0 * kPi * f0 / fs;
-    const double dw = w0 / Q;                   // constant-Q bandwidth
+    const double w0 = 2.0 * kPi * clampFc (f0, fs) / fs;
+    const double dw = w0 / clampQ (Q);          // constant-Q bandwidth
     return peq (1.0, G, GB, w0, dw);
 }
 
@@ -558,8 +582,8 @@ inline BiquadCoef bell (double fs, double f0, double gainDb, double Q)
 // Used for "Flat Tilt": g0 = G, g1 = 1/G — a constant tilt across the spectrum.
 inline BiquadCoef firstOrderTilt(double fs, double f0, double gainDb) {
     const double G = dbToLin(gainDb);                 // DC gain
-    const double w = std::tan(kPi * f0 / fs);         // tan(w0/2)
-    const double g0 = G, g1 = 1.0 / G;
+    const double w = std::tan(kPi * clampFc (f0, fs) / fs);   // tan(w0/2), clamped
+    const double g0 = G, g1 = 1.0 / std::max (G, 1e-12);
     const double den = w + 1.0;
     BiquadCoef r;
     r.b0 = (g0 * w + g1) / den;
@@ -572,7 +596,7 @@ inline BiquadCoef firstOrderTilt(double fs, double f0, double gainDb) {
 
 // First-order lowpass/highpass (BLT, prewarped) for 6 dB/oct cuts.
 inline BiquadCoef firstOrderLowpass(double fs, double f0) {
-    const double k = std::tan(kPi * f0 / fs);         // tan(w0/2)
+    const double k = std::tan(kPi * clampFc (f0, fs) / fs);   // tan(w0/2), clamped
     const double den = k + 1.0;
     BiquadCoef r;
     r.b0 = k / den;
@@ -584,7 +608,7 @@ inline BiquadCoef firstOrderLowpass(double fs, double f0) {
 }
 
 inline BiquadCoef firstOrderHighpass(double fs, double f0) {
-    const double k = std::tan(kPi * f0 / fs);         // tan(w0/2)
+    const double k = std::tan(kPi * clampFc (f0, fs) / fs);   // tan(w0/2), clamped
     const double den = k + 1.0;
     BiquadCoef r;
     r.b0 = 1.0 / den;
