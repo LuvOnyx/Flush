@@ -91,7 +91,7 @@ cd plugins/Flush/tests
 g++ -std=c++20 -O2 -I../Source/dsp dsp_smoke.cpp -o dsp_smoke && ./dsp_smoke
 ```
 
-57 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
+61 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
 LP/HP −3.01 dB @ fc, a three-way no-cramp comparison (RBJ 47% vs Vicanek 7% vs Orfanidis
 2.1%), decramped shelves vs the analog prototype, TPT/ZDF SVF, coefficient morphing,
 Oxford-style adaptive release, Flush Match (K-weighted) neutralizing a +6 dB change and
@@ -117,13 +117,13 @@ or use `scripts/build-and-install.sh -PluginName Flush` (honors `apc.config.json
 
 - [x] Concept + architecture (dream/plan) — `status.json`
 - [x] Design v2 (Pro-Q4 recreation spec) — `Design/v2-ui-spec.md`
-- [x] DSP core — written + **verified** (57/57 tests): filters, dynamics, loudness, FFT,
-      linear-phase FIR, 2x/4x oversampling, analyzer, spectral dynamics, gain-Q
-- [x] JUCE processor — APVTS + 24-band state + full chain (linear FIR, 2x/4x oversampling,
-      spectral mode, analyzer, metering, latency) + factory presets + A/B
-- [x] Visage UI (Pro-Q4 recreation + preset bar + settings modal) — written
-- [x] Hardening & polish — per-band dynamics sample-rate fix, spectral GR metering,
-      thread-safe UI curve snapshot, atomic dirty flags, latency-report ordering,
-      no-overlap toolbar layout, drawn gear icon, on/off toggles
+- [x] DSP core — written + **verified** (61/61 tests): filters, dynamics, loudness, FFT,
+      linear-phase FIR, 2x/4x oversampling, analyzer, spectral dynamics, gain-Q, SVF cuts
+- [x] JUCE processor — APVTS + 24-band state + full chain (linear FIR w/ quality tiers,
+      2x/4x oversampling, spectral mode, analyzer, metering, latency) + factory presets + A/B + band solo
+- [x] Visage UI (Pro-Q4 recreation + preset bar + settings modal + GR meter) — written
+- [x] Hardening & polish — cut-type swap fixed (LowCut=HP/HighCut=LP), SVF cuts, const-correctness,
+      per-band dynamics sample-rate fix, spectral GR metering, thread-safe UI curve snapshot,
+      atomic dirty flags, latency-report ordering, knob track arc, drawn gear, toggles
 - [ ] User preset save/load (format defined)
-- [ ] Compile against JUCE 9 + Visage + listen/measure pass (needs cmake + platform libs)
+- [ ] Compile against JUCE 9 + Visage + listen/measure pass — **see HANDOFF.md**

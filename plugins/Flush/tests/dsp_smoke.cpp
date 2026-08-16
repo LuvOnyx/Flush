@@ -718,6 +718,40 @@ int main() {
               ("96k " + std::to_string(gr96) + " vs 48k " + std::to_string(gr48)).c_str());
     }
 
+    // ---- 27. SVF cut cascade (LowCut = high-pass, HighCut = low-pass) -----
+    {
+        // 4 cascaded 2nd-order Butterworth SVF sections = 8th order (48 dB/oct).
+        // "Low Cut" semantics: attenuate lows, pass highs -> high-pass cascade.
+        std::vector<SvFilter> hp;
+        for (int i = 0; i < 4; ++i) {
+            SvFilter f; f.set (SvFilter::Kind::HighPass, fs, 1000.0, 0.7071067811865476);
+            hp.push_back (f);
+        }
+        auto procHp = [&](double x){ double y = x; for (auto& f : hp) y = f.process (y); return y; };
+        const double gfc   = measureGainDb (procHp, fs, 1000.0);
+        const double ghalf = measureGainDb (procHp, fs, 500.0);
+        const double gpass = measureGainDb (procHp, fs, 5000.0);
+        std::printf("         SVF 8th-order LowCut: %.2f dB @fc, %.2f dB @fc/2, %.2f dB @5fc\n",
+                    gfc, ghalf, gpass);
+        CHECK("SVF LowCut -12 dB @ fc (8th order)", std::fabs (gfc - (-12.04)) < 1.0,
+              ("measured " + std::to_string(gfc) + " dB").c_str());
+        CHECK("SVF LowCut steep slope below fc (~-49 dB @ fc/2)", ghalf < gfc - 30.0,
+              ("measured " + std::to_string(ghalf) + " dB").c_str());
+        CHECK("SVF LowCut passes highs (~0 dB @ 5fc)", std::fabs (gpass) < 0.5,
+              ("measured " + std::to_string(gpass) + " dB").c_str());
+
+        // "High Cut" semantics: attenuate highs, pass lows -> low-pass cascade.
+        std::vector<SvFilter> lp;
+        for (int i = 0; i < 4; ++i) {
+            SvFilter f; f.set (SvFilter::Kind::LowPass, fs, 1000.0, 0.7071067811865476);
+            lp.push_back (f);
+        }
+        auto procLp = [&](double x){ double y = x; for (auto& f : lp) y = f.process (y); return y; };
+        const double lpLow = measureGainDb (procLp, fs, 200.0);
+        CHECK("SVF HighCut passes lows (~0 dB @ fc/5)", std::fabs (lpLow) < 0.5,
+              ("measured " + std::to_string(lpLow) + " dB").c_str());
+    }
+
     std::printf("\n%s — %d failure(s)\n", g_failures ? "FAILED" : "ALL PASSED", g_failures);
     return g_failures ? 1 : 0;
 }

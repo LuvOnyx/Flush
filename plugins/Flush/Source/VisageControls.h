@@ -202,6 +202,11 @@ private:
             const float ty = y0 + h - h * (float)((tick + 60.0) / 60.0);
             canvas.text (juce::String ((int)tick).toRawUTF8(), labelFont_, visage::Font::kRight, 0.0f, ty - 5.0f, x - 2.0f, 10.0f);
         }
+
+        // Numeric level readout (dBFS) under the meter.
+        canvas.setColor (C::text);
+        canvas.text (juce::String (db, 1).toRawUTF8(), labelFont_, visage::Font::kCenter,
+                     0.0f, height() - 12.0f, width(), 10.0f);
     }
 
     void drawVU (visage::Canvas& canvas, double db)
@@ -232,6 +237,51 @@ private:
     const std::atomic<float>& level_;
     const std::atomic<float>& peak_;
     visage::Font labelFont_;
+};
+
+// ============================================== Gain-reduction meter ==========
+class FlushGrMeter : public visage::Frame
+{
+public:
+    explicit FlushGrMeter (const std::atomic<float>& gr) : gr_ (gr) {}
+
+    void init() override
+    {
+        const float dpi = std::max (1.0f, dpiScale());
+        label_font_ = makeFont (8.0f, dpi);
+    }
+
+    void draw (visage::Canvas& canvas) override
+    {
+        const float x = 4.0f, w = width() - 8.0f;
+        const float y0 = 2.0f, h = height() - 24.0f;
+
+        canvas.setColor (C::surface);
+        canvas.rectangle (x, y0, w, h);
+
+        // Downward GR bar: 0..-24 dB, hangs from the top.
+        const float gr = clamp (gr_.load() / 24.0f, 0.0f, 1.0f);
+        const float filled = h * gr;
+        if (filled > 0.5f) {
+            canvas.setColor (C::accent);
+            canvas.rectangle (x, y0, w, filled);
+            canvas.setColor (C::accentSoft);
+            canvas.rectangle (x, y0 + filled, w, 2.0f);
+        }
+
+        canvas.setColor (C::hairline);
+        canvas.rectangleBorder (x, y0, w, h, 1.0f);
+
+        canvas.setColor (C::label);
+        canvas.text ("GR", label_font_, visage::Font::kCenter, 0.0f, height() - 22.0f, width(), 10.0f);
+        canvas.setColor (C::textDim);
+        canvas.text (juce::String (gr_.load(), 1).toRawUTF8(), label_font_,
+                     visage::Font::kCenter, 0.0f, height() - 12.0f, width(), 10.0f);
+    }
+
+private:
+    const std::atomic<float>& gr_;
+    visage::Font label_font_;
 };
 
 // ============================================== Click-to-cycle choice control ==
@@ -315,6 +365,9 @@ public:
                 const unsigned int a = (unsigned int)(0x60 + 0x80 * lvl);
                 canvas.setColor ((a << 24) | (C::accent & 0x00ffffff));
                 canvas.rectangle (px + i * colW, py + ph - colH, std::max (1.0f, colW - 0.5f), colH);
+                // Bright 2 px top edge (Pro-Q-style peak "hairline").
+                canvas.setColor (C::accentSoft);
+                canvas.rectangle (px + i * colW, py + ph - colH, std::max (1.0f, colW - 0.5f), 2.0f);
             }
         }
 
@@ -801,7 +854,10 @@ public:
 
         addChild (std::make_unique<FlushSettingsButton> ([this] { setModalVisible (!modalVisible_); }));
 
-        // 17: settings modal (overlay).
+        // 17: compressor gain-reduction meter.
+        addChild (std::make_unique<FlushGrMeter> (processor.meterGrDb));
+
+        // 18: settings modal (overlay, drawn last = on top).
         modal_ = new FlushSettingsModal (processor, [this] { setModalVisible (false); });
         addChild (std::unique_ptr<FlushSettingsModal> (modal_));
     }
@@ -860,7 +916,10 @@ public:
         child (15)->setBounds (w - 102.0f, 6.0f, 52.0f, 36.0f);
         child (16)->setBounds (w - 44.0f, 6.0f, 40.0f, 36.0f);
 
-        // 17: settings modal overlay (full window when visible).
+        // 17: compressor GR meter (right edge of the compressor column).
+        child (17)->setBounds (compX + compW - 26.0f, bodyY + 8.0f, 18.0f, bodyH - 40.0f);
+
+        // 18: settings modal overlay (full window when visible).
         if (modal_ && modalVisible_)
             modal_->setBounds (0.0f, 0.0f, w, h);
     }

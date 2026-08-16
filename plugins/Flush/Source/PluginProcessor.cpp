@@ -97,6 +97,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout FlushAudioProcessor::createP
         juce::ParameterID { "eq_phase_mode", 1 }, "Phase Mode",
         juce::StringArray { "Low Latency", "Natural", "Linear" }, 0));
     layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "eq_linear_quality", 1 }, "Linear Quality",
+        juce::StringArray { "Low", "Medium", "High", "Max" }, 1));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "eq_oversample", 1 }, "Oversampling",
         juce::StringArray { "Off", "2x", "4x" }, 0));
     layout.add (std::make_unique<juce::AudioParameterChoice> (
@@ -280,6 +283,9 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
 
     br.sectionsM.clear();
     br.sectionsS.clear();
+    br.svfM.clear();
+    br.svfS.clear();
+    br.useSvf = false;
     br.coefs.clear();
 
     const double fs = sampleRate, f0 = br.freq, gain = br.gainDb, Q = br.q;
@@ -299,6 +305,21 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
         br.coefs.push_back (c);                          // for linear-phase FIR design
     };
 
+    // Cut filters run on the TPT/ZDF SVF (denormal-free, LF-stable). `coefs` is
+    // filled with the EQUIVALENT bilinear (RBJ) magnitude — exactly what the
+    // prewarped SVF realizes — so the FIR designer and UI curve stay in sync
+    // with the audio path.
+    auto pushSvfCut = [&](flush::SvFilter::Kind kind) {
+        flush::SvFilter a; a.set (kind, fs, f0, kCutQ);
+        flush::SvFilter b; b.set (kind, fs, f0, kCutQ);
+        br.svfM.push_back (a);
+        br.svfS.push_back (b);
+        br.useSvf = true;
+        br.coefs.push_back (kind == flush::SvFilter::Kind::LowPass
+                                ? flush::rbj::lowpass (fs, f0, kCutQ)
+                                : flush::rbj::highpass (fs, f0, kCutQ));
+    };
+
     switch (br.shape) {
         case flush::Shape::Bell:
             pushSection (orfanidisMode ? flush::orfanidis::bell (fs, f0, gain, Q)
@@ -316,17 +337,20 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
             break;
 
         case flush::Shape::LowCut: {
-            // Slope 12-48 dB/oct in 12 dB steps => 1-4 cascaded 2nd-order sections.
+            // "Low Cut" = cut the LOWS = high-pass filter. (Was incorrectly a
+            // low-pass before — a low-pass here would remove everything ABOVE the
+            // cutoff.) Slope 12-48 dB/oct => 1-4 cascaded 2nd-order sections.
             const int n = std::max (1, std::min (4, (int)std::lround (br.slopeDbOct / 12.0)));
             for (int i = 0; i < n; ++i)
-                pushSection (flush::matched::lowpass (fs, f0, kCutQ));
+                pushSvfCut (flush::SvFilter::Kind::HighPass);
             break;
         }
 
         case flush::Shape::HighCut: {
+            // "High Cut" = cut the HIGHS = low-pass filter.
             const int n = std::max (1, std::min (4, (int)std::lround (br.slopeDbOct / 12.0)));
             for (int i = 0; i < n; ++i)
-                pushSection (flush::matched::highpass (fs, f0, kCutQ));
+                pushSvfCut (flush::SvFilter::Kind::LowPass);
             break;
         }
 
@@ -406,6 +430,15 @@ double FlushAudioProcessor::processBandChannel (std::vector<flush::MorphingBiqua
     return out;
 }
 
+// Process one channel's TPT/ZDF state-variable cascade (cut filters).
+double FlushAudioProcessor::processBandSv (std::vector<flush::SvFilter>& sections, double in)
+{
+    double out = in;
+    for (auto& s : sections)
+        out = s.process (out);
+    return out;
+}
+
 // Total magnitude of a band's cascade at frequency f (Hz) — used to design the
 // combined linear-phase FIR of the whole static EQ.
 double FlushAudioProcessor::bandMagnitudeAt (int index, double f) const
@@ -441,9 +474,15 @@ void FlushAudioProcessor::rebuildLinearFir()
 
 void FlushAudioProcessor::processEqSample (double& m, double& s)
 {
+    // Band solo: if ANY band is soloed, only soloed bands process (Pro-Q style).
+    bool anySolo = false;
+    for (int i = 0; i < kMaxBands; ++i)
+        if (bands_[i].enabled && bands_[i].solo) { anySolo = true; break; }
+
     for (int i = 0; i < kMaxBands; ++i) {
-        const auto& br = bands_[i];
+        auto& br = bands_[i];
         if (!br.enabled) continue;
+        if (anySolo && !br.solo) continue;
 
         // In linear-phase mode the static bands are handled by the combined FIR;
         // only the (minimum-phase) dynamic bands pass through this loop.
@@ -452,8 +491,14 @@ void FlushAudioProcessor::processEqSample (double& m, double& s)
         const bool useM = (br.channel == 0 || br.channel == 1);   // stereo | mid
         const bool useS = (br.channel == 0 || br.channel == 2);   // stereo | side
 
-        double bandM = useM ? processBandChannel (br.sectionsM, m) : m;
-        double bandS = useS ? processBandChannel (br.sectionsS, s) : s;
+        double bandM = m, bandS = s;
+        if (br.useSvf) {
+            if (useM) bandM = processBandSv (br.svfM, m);
+            if (useS) bandS = processBandSv (br.svfS, s);
+        } else {
+            if (useM) bandM = processBandChannel (br.sectionsM, m);
+            if (useS) bandS = processBandChannel (br.sectionsS, s);
+        }
 
         double k = 1.0;
         if (br.dynamic) {
@@ -506,6 +551,17 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     // --- phase mode / oversampling / band rebuild ---------------------------
     linearActive_ = (phaseMode() == 2);
+
+    // Linear-phase FIR quality (latency/accuracy trade-off), Pro-Q style:
+    // Low/Medium/High/Max -> FIR length -> group delay.
+    const int firQuality = (int)*parameters.getRawParameterValue ("eq_linear_quality");
+    if (firQuality != lastFirQuality_) {
+        static constexpr int kFirLengths[4] = { 511, 1023, 2047, 4095 };
+        firLength_ = kFirLengths[juce::jlimit (0, 3, firQuality)];
+        lastFirQuality_ = firQuality;
+        linearFirDirty_.store (true);
+    }
+
     const int oversampleNow = (int)*parameters.getRawParameterValue ("eq_oversample");  // 0/1/2
     if (oversampleNow != oversampleMode_ || phaseMode() != lastPhaseMode_) {
         oversampleMode_ = oversampleNow;

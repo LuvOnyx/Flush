@@ -5,7 +5,7 @@
   "ui_framework": "visage",
   "complexity_score": 4,
   "created_at": "2026-08-15T20:55:09Z",
-  "last_modified": "2026-08-16T01:40:00Z",
+  "last_modified": "2026-08-16T02:00:00Z",
   "phase_history": [
     {
       "phase": "ideation_complete",
@@ -31,7 +31,7 @@
       "phase": "code_in_progress",
       "completed_at": "2026-08-15T23:10:00Z",
       "framework_selected": "visage",
-      "notes": "IMPLEMENTATION COMPLETE + HARDENING/POLISH PASS. DSP core 57/57 verified (pure C++, double precision): spectral dynamics (overlap-add), 4x oversampling, gain-Q, matched 0dB identity, dynamics sample-rate invariance @96k, plus all prior (filters, Oxford dynamics, BS.1770 K-weighting 0.000000 dB, true-peak, FFT, linear-phase FIR symmetry 3.8e-17, 2x -72dB image, analyzer). BUGS FIXED this pass: (1) per-band DynamicsEngine now reset at the processing rate (was defaulting to 48k regardless of host); (2) spectral mode now reports spectral peak GR instead of stale broadband GR; (3) EQ curve draws from a mutex-guarded UI snapshot (never races an in-place audio rebuild); (4) dirty flags are atomic (UI->audio handoff); (5) spectralActive_ computed before updateLatency() (no one-block latency lag); (6) prepareToPlay uses oversampleMode_ (compile fix). UI POLISH: knob inactive track arc, drawn gear icon (no missing-glyph risk), EQ/analyzer on-off toggles, preset toolbar (no input-column overlap), Flush-delta centered + latency repositioned. NOT compile-verified (no cmake/visage build); first build + listen/measure pass remains."
+      "notes": "FINAL QUALITY PASS. DSP core 61/61 verified (pure C++, double precision). CRITICAL FIX: LowCut/HighCut had their filter types SWAPPED (LowCut was a low-pass -> would have removed everything above the cutoff; any preset using a cut was broken). Now LowCut=high-pass / HighCut=low-pass, and both run on the TPT/ZDF SVF (denormal-free, LF-stable) with the equivalent bilinear magnitude stored for the FIR/curve path (verified: 8th-order SVF cut = -12.04 dB @ fc, -49.29 @ fc/2, -0.02 @ 5fc). COMPILE FIX: processEqSample used const auto& then mutated -> now auto&. ADDED: band solo (soloed bands isolate), linear-phase FIR quality tiers (Low/Medium/High/Max = 511/1023/2047/4095 taps, Pro-Q style latency/accuracy trade). UI: compressor GR meter, analyzer peak top-edge hairline, numeric dBFS readouts on meters. READY TO HAND OFF to a local build agent (see HANDOFF.md)."
     }
   ],
   "validation": {
@@ -63,8 +63,12 @@
     "spectrum_analyzer": "COMPLETE (Hann FFT, overlap, tilt, peak hold, max-in-band)",
     "processor": "COMPLETE (APVTS + 24-band state + chain incl. linear FIR + 2x/4x oversampling + spectral mode + analyzer + metering + latency)",
     "factory_presets": "COMPLETE (7 presets) + A/B compare slots",
-    "hardening": "COMPLETE (per-band dyn sample-rate fix, spectral GR meter, UI curve snapshot mutex, atomic dirty flags, latency-report ordering)",
-    "ui_polish": "COMPLETE (knob track arc, drawn gear icon, on/off toggles, toolbar layout with no input/preset overlap)",
+    "svf_cuts": "COMPLETE (LowCut/HighCut run on TPT/ZDF SVF; verified 8th-order -12.04 dB @ fc)",
+    "cut_type_fix": "COMPLETE (LowCut=high-pass / HighCut=low-pass semantics corrected)",
+    "band_solo": "COMPLETE (soloed bands isolate, Pro-Q style)",
+    "fir_quality_tiers": "COMPLETE (Low/Medium/High/Max -> 511/1023/2047/4095 taps)",
+    "hardening": "COMPLETE (per-band dyn sample-rate fix, spectral GR meter, UI curve snapshot mutex, atomic dirty flags, latency-report ordering, const-correctness fix in processEqSample)",
+    "ui_polish": "COMPLETE (knob track arc, drawn gear icon, on/off toggles, GR meter, analyzer top-edge, numeric meter readouts, toolbar layout)",
     "visage_ui": "WRITTEN (Pro-Q4 recreation + preset bar + settings modal; uncompiled in this env)",
     "user_presets_save_load": "PENDING (format defined)",
     "compile": "PENDING (needs cmake + platform libs)"

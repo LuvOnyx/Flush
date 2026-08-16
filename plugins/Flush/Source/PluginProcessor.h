@@ -113,8 +113,16 @@ private:
         // Cuts are multi-section cascades; each channel keeps its own state.
         // Sections morph (output-crossfade) on coefficient change — click-free
         // automation of gain/freq/Q on every band.
+        //
+        // Cut filters (LowCut/HighCut) run on the TPT/ZDF state-variable filter
+        // (denormal-free, low-frequency stable) instead of the DF-II biquads;
+        // `coefs` still holds the equivalent magnitude response so the FIR
+        // designer and UI curve stay consistent with what the SVF actually does.
         std::vector<flush::MorphingBiquad> sectionsM;
         std::vector<flush::MorphingBiquad> sectionsS;
+        std::vector<flush::SvFilter> svfM;
+        std::vector<flush::SvFilter> svfS;
+        bool useSvf = false;
         std::vector<flush::BiquadCoef> coefs;   // per-section coefficients (for FIR design)
         flush::DynamicsEngine dyn;
     };
@@ -123,6 +131,7 @@ private:
     void refreshBands (double sampleRate);
     void publishUiSnapshot (double sampleRate);
     double processBandChannel (std::vector<flush::MorphingBiquad>& sections, double in);
+    double processBandSv (std::vector<flush::SvFilter>& sections, double in);
     void processEqSample (double& m, double& s);
     double bandMagnitudeAt (int index, double f) const;
     void rebuildLinearFir();
@@ -170,7 +179,8 @@ private:
     std::vector<double> linearCoeffs_;
     std::atomic<bool> linearFirDirty_ { true };
     bool linearReady_ = false;
-    int firLength_ = 2047;               // ~21 ms latency @ 48 kHz (medium quality)
+    int firLength_ = 2047;               // Medium quality (~21 ms latency @ 48 kHz)
+    int lastFirQuality_ = -1;
     bool linearActive_ = false;
 
     double sampleRate_ = 48000.0;
