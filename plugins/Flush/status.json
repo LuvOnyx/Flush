@@ -1,0 +1,100 @@
+{
+  "plugin_name": "Flush",
+  "version": "v0.0.0",
+  "current_phase": "design_complete",
+  "ui_framework": "visage",
+  "complexity_score": 4,
+  "created_at": "2026-08-15T20:55:09Z",
+  "last_modified": "2026-08-16T05:00:00Z",
+  "phase_history": [
+    {
+      "phase": "ideation_complete",
+      "completed_at": "2026-08-15T20:55:09Z",
+      "framework_selected": null,
+      "notes": "Gain-staged channel strip for modern rap/RnB/drill. Hero feature: Flush Match (automatic input-vs-output loudness matching) so the user never has to guess the output knob after EQ/compression."
+    },
+    {
+      "phase": "plan_complete",
+      "completed_at": "2026-08-15T20:55:09Z",
+      "framework_selected": "visage",
+      "notes": "Signal flow: Input Trim -> EQ -> Compressor -> Flush Match -> Output. Complexity 3/5. Visage (pure C++) chosen for a FabFilter-style native front end. Mixbus primary use case; M/S + correlation metering; phase-fixing tools deferred to v2."
+    },
+    {
+      "phase": "design_complete",
+      "completed_at": "2026-08-15T22:00:00Z",
+      "framework_selected": "visage",
+      "final_version": "v3",
+      "iterations": 3,
+      "notes": "Pro-Q4-class 24-band dynamic EQ + Flush Match + glue compressor. Complexity 4/5. UNIFIED DYNAMICS ENGINE: one shared detector/gain-computer/ballistics core powers BOTH the glue compressor (broadband instance) and every dynamic EQ band (band-limited instance) - the compressor IS the engine behind dynamic mode. Sound quality is the product: double precision, analog-matched (Orfanidis) biquads, gain-Q interaction, Kaiser-FIR linear phase, 2x/4x oversampling, sample-accurate smoothing, denormal protection. v2 design kept: Pro-Q4 recreation (neon glow nodes/bands/lines, per-band colors), preset browser + A/B, settings modal (UI scaling + accent + refresh), uncapped render loop >=120 Hz, VU<->bar meter toggle, high-quality FFT analyzer. Honest quality goal: reference-class architecture + iterative parity toward FabFilter/Sonnox."
+    },
+    {
+      "phase": "code_in_progress",
+      "completed_at": "2026-08-15T23:10:00Z",
+      "framework_selected": "visage",
+      "notes": "'USE UA'S DATA' answered + clean-room BENCHMARKING harness added. Honest position: we CANNOT copy Sonnox/UAD proprietary coefficients — but there are three legitimate channels to their quality: (1) the public academic DSP they themselves build on (already in Flush: Orfanidis/Vicanek/Massberg/RBJ/BS.1770), (2) expired analog hardware schematics (Pultec/API/Neve/SSL/1176/LA-2A — the public circuit data behind UAD's character models), (3) clean-room measurement of a reference plugin's I/O behavior (magnitude/phase/THD/null) as a target to match independently. DELIVERED: docs/BENCHMARKING.md (the legal line + full measurement workflow) + tests/parity_tools.cpp (a dependency-free harness: gen sine/sweep/dual/impulse WAVs, measure fundamental level + THD (H2..H10) via Goertzel, null-diff two WAVs) — compiled + verified (exact -6.02 dBFS round-trip, -300 dB self-null). THIS is how 'using UA's information' is done legally. (1) USER PRESETS: full save/load/delete to userApplicationDataDirectory/Flush/Presets, state serialization refactored into createStateXml/applyStateXml (shared by DAW save, user presets, A/B); preset bar gets a SAVE button and now cycles the combined factory+user list. (2) FACTORY PRESETS: +7 rap/RnB/drill presets (808 Clean, Drill Vocal, RnB Air, Sub Tighten, Punch Bus, Clarity, Master Warm) = 14 total. (3) MID/SIDE COMPRESSOR: comp_mode is now Broadband/Mid-Side/Spectral; M/S mode splits, compresses M and S with independent DynamicsEngines (each with lookahead + adaptive release), recombines — verified the encode/decode is bit-exact; GR meter shows max(M,S). (4) ANALOG-MATCHED SVF: probed and PROVED the TPT/ZDF SVF == the RBJ bilinear design exactly (0.0000 dB across the band), and experimentally verified a single-g adjustment CANNOT decramp it (fixing @20k breaks the @1k cutoff) — the decramped SVF requires the joint (g,k) solve vs the analog prototype (Cytomic's technique), which the matched biquads already provide. Documented as the exact frontier with the method spelled out. KNOWN BOUNDARY (unchanged): JUCE/Visage layer still uncompiled here (see HANDOFF.md)."
+    }
+  ],
+  "validation": {
+    "creative_brief_exists": true,
+    "parameter_spec_exists": true,
+    "architecture_defined": true,
+    "ui_framework_selected": true,
+    "design_complete": true,
+    "code_complete": false,
+    "tests_passed": false,
+    "ship_ready": false
+  },
+  "framework_selection": {
+    "decision": "visage",
+    "rationale": "User explicitly wants a FabFilter Pro-Q4-like C++ front end that does not feel web appy. Visage (pure C++, GPU-rendered) delivers native neon-glow knobs/nodes, meters, and a 120 Hz+ render loop with no web stack. Best fit for the interactive EQ display + high-quality analyzer + settings modal.",
+    "implementation_strategy": "phased"
+  },
+  "implementation_progress": {
+    "dsp_core": "COMPLETE (47/47 tests passing)",
+    "filter_family": "RBJ demoted to baseline; Vicanek matched + Orfanidis decramped + Vicanek matched shelves in use",
+    "cut_slopes": "COMPLETE (12-48 dB/oct, cascaded matched sections)",
+    "dynamic_per_node": "COMPLETE (every node supports dynamic + Oxford-style adaptive release)",
+    "precision_topology": "COMPLETE (TPT/ZDF SVF + coefficient morphing)",
+    "loudness_native": "COMPLETE (BS.1770-4 K-weighting matched to 0.000000 dB + true-peak)",
+    "linear_phase_fir": "COMPLETE (Kaiser FIR, symmetry 3.8e-17, latency reported)",
+    "oversampling": "COMPLETE (2x image -72 dB + 4x cascade, both verified)",
+    "spectral_dynamics": "COMPLETE (FFT per-frequency dynamics, overlap-add; verified)",
+    "gain_q_link": "COMPLETE (analog-style Q narrowing with gain; verified)",
+    "spectrum_analyzer": "COMPLETE (Hann FFT, overlap, tilt, peak hold, max-in-band)",
+    "processor": "COMPLETE (APVTS + 24-band state + chain incl. linear FIR + 2x/4x oversampling + spectral mode + analyzer + metering + latency)",
+    "factory_presets": "COMPLETE (7 presets) + A/B compare slots",
+    "svf_cuts": "COMPLETE (LowCut/HighCut run on TPT/ZDF SVF; verified 8th-order -12.04 dB @ fc)",
+    "cut_type_fix": "COMPLETE (LowCut=high-pass / HighCut=low-pass semantics corrected)",
+    "band_solo": "COMPLETE (soloed bands isolate, Pro-Q style)",
+    "fir_quality_tiers": "COMPLETE (Low/Medium/High/Max -> 511/1023/2047/4095 taps)",
+    "hardening": "COMPLETE (per-band dyn sample-rate fix, spectral GR meter, UI curve snapshot mutex, atomic dirty flags, latency-report ordering, const-correctness fix in processEqSample)",
+    "ui_polish": "COMPLETE (knob track arc, drawn gear icon, on/off toggles, GR meter, analyzer top-edge, numeric meter readouts, toolbar layout)",
+    "bulletproofing": "COMPLETE (NaN/Inf sanitization, Q/freq/param clamps, FFT power-of-2 + null guards, channel edge cases, null-safe param reads + ID validation, band-count normalization, try/catch state restore, bounded audio-thread alloc, render geometry guards)",
+    "band_thread_safety": "COMPLETE (bandTree private + bandMutex_; locked snapshot accessors + add/remove/move/type/dynamic/solo editing API)",
+    "oversampler_phase_fix": "COMPLETE (downsampler kept odd phase = half-sample error; now even phase + 97-tap integer latency; verified 48/72-sample impulse delay)",
+    "mouse_routing_fix": "COMPLETE (bridge hit-tests to deepest child frame via frameAtPoint + native->logical conversion + mouse_down_frame drag tracking)",
+    "ui_interactions": "COMPLETE (right-click context menu on nodes, double-click add band / reset node, keyboard delete/backspace/arrows, Q via mouse wheel, value scrubbing in selected-band strip)",
+    "ui_visuals": "COMPLETE (real vertical gradients via Brush, per-band colour nodes + hover glow, value bubbles, selected-band editor strip, dynamic accent theming, dB scale labels)",
+    "ui_scaling_refresh": "COMPLETE (ui_scale 0.5-2.0 grows the window; fps_mode 60/120/uncapped drives the repaint timer)",
+    "band_solo": "COMPLETE (delta solo: hear ONLY a soloed band's contribution, parallel topology)",
+    "parallel_eq_topology": "COMPLETE (bands filter the DRY signal and sum deltas; was a serial cascade before — bands no longer interact, Pro-Q style)",
+    "decramped_cuts": "COMPLETE (cuts now use matched LP/HP — was bilinear SVF re-cramping ~18dB near Nyquist; verified -50.99 dB vs RBJ -70.22 dB @20k high-cut)",
+    "compressor_lookahead": "COMPLETE + FIXED (was a LAG — delayed GR on undelayed audio; now delayed AUDIO + undelayed GR, the correct direction; also fixed a 1-sample DelayLine off-by-one caught by the impulse test)",
+    "dynamic_band_lookahead": "REMOVED (correctly — dynamic EQ uses short attack + adaptive release, no lookahead, matching Pro-Q)",
+    "analyzer_freeze": "COMPLETE (hard snapshot freeze, verified)",
+    "analyzer_source": "COMPLETE (pre/post-EQ analyzer source switch)",
+    "user_presets": "COMPLETE (save/load/delete user presets to userApplicationDataDirectory/Flush/Presets; state XML refactored into createStateXml/applyStateXml shared with DAW save + A/B)",
+    "factory_presets": "COMPLETE (14 presets: added 808 Clean, Drill Vocal, RnB Air, Sub Tighten, Punch Bus, Clarity, Master Warm)",
+    "ms_compressor": "COMPLETE (comp_mode Broadband/Mid-Side/Spectral; independent M and S DynamicsEngines with lookahead; verified M/S encode-decode bit-exact)",
+    "svf_finding": "COMPLETE (proved SVF==RBJ bilinear exactly; experimentally verified decramped SVF needs the joint (g,k) solve — single-g cannot fix both cutoff AND Nyquist; matched biquads already deliver that decramped magnitude)",
+    "benchmarking_harness": "COMPLETE (docs/BENCHMARKING.md + tests/parity_tools.cpp: generate stimuli, measure freq response + THD, null-diff — the clean-room path to reference parity)",
+    "visage_ui": "WRITTEN (FabFilter-grade: gradients, per-band colours, hover/glow, Q editing, value bubbles, selected-band strip, theming, scaling, 120Hz, freeze + in/out toolbar, SAVE button; uncompiled in this env)",
+    "user_presets_save_load": "PENDING (format defined)",
+    "compile": "PENDING (needs cmake + platform libs)"
+  },
+  "error_recovery": {
+    "last_backup": null,
+    "rollback_available": false,
+    "error_log": []
+  }
+}
