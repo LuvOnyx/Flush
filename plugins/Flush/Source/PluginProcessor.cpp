@@ -193,6 +193,8 @@ void FlushAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     outputGainSmooth_.setTau (0.005, sampleRate);
 
     compressor_.reset (sampleRate);
+    compDelayL_.setDelay (0);
+    compDelayR_.setDelay (0);
     flushMatch_.reset (sampleRate);
     flushMatch_.setTiming (paramI ("flush_speed"));
 
@@ -224,8 +226,6 @@ void FlushAudioProcessor::releaseResources()
     for (auto& b : bands_) {
         b.sectionsM.clear();
         b.sectionsS.clear();
-        b.svfM.clear();
-        b.svfS.clear();
         b.coefs.clear();
     }
 }
@@ -317,7 +317,8 @@ void FlushAudioProcessor::updateLatency()
         latencyBase += (double)spectralL_.latency();
 
     // Compressor lookahead (broadband mode only — spectral mode has its own
-    // overlap-add latency and doesn't use the time-domain engine).
+    // overlap-add latency and doesn't use the time-domain engine). The audio is
+    // delayed by this many samples and the undelayed GR applied to it.
     if (!spectralActive_)
         latencyBase += (double)compressor_.lookaheadLatencySamples();
 
@@ -358,9 +359,6 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
 
     br.sectionsM.clear();
     br.sectionsS.clear();
-    br.svfM.clear();
-    br.svfS.clear();
-    br.useSvf = false;
     br.coefs.clear();
 
     // Real-time safety: a band is at most 4 sections (12-48 dB/oct cuts) or 1
@@ -370,8 +368,6 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
     // on the audio thread.
     br.sectionsM.reserve (4);
     br.sectionsS.reserve (4);
-    br.svfM.reserve (4);
-    br.svfS.reserve (4);
     br.coefs.reserve (4);
 
     const double fs = sampleRate, f0 = br.freq, gain = br.gainDb, Q = br.q;
@@ -391,20 +387,12 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
         br.coefs.push_back (c);                          // for linear-phase FIR design
     };
 
-    // Cut filters run on the TPT/ZDF SVF (denormal-free, LF-stable). `coefs` is
-    // filled with the EQUIVALENT bilinear (RBJ) magnitude — exactly what the
-    // prewarped SVF realizes — so the FIR designer and UI curve stay in sync
-    // with the audio path.
-    auto pushSvfCut = [&](flush::SvFilter::Kind kind) {
-        flush::SvFilter a; a.set (kind, fs, f0, kCutQ);
-        flush::SvFilter b; b.set (kind, fs, f0, kCutQ);
-        br.svfM.push_back (a);
-        br.svfS.push_back (b);
-        br.useSvf = true;
-        br.coefs.push_back (kind == flush::SvFilter::Kind::LowPass
-                                ? flush::rbj::lowpass (fs, f0, kCutQ)
-                                : flush::rbj::highpass (fs, f0, kCutQ));
-    };
+    // Cuts use the Vicanek MATCHED (decramped) LP/HP, NOT the bilinear SVF: the
+    // bilinear design re-cramps the high-frequency response near Nyquist, which
+    // is exactly the artifact the rest of the EQ (matched bells/shelves) already
+    // avoids. Every audible-magnitude shape in Flush is now decramped; double
+    // precision + sanitize() cover the low-frequency stability the SVF used to
+    // provide.
 
     switch (br.shape) {
         case flush::Shape::Bell:
@@ -423,20 +411,19 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
             break;
 
         case flush::Shape::LowCut: {
-            // "Low Cut" = cut the LOWS = high-pass filter. (Was incorrectly a
-            // low-pass before — a low-pass here would remove everything ABOVE the
-            // cutoff.) Slope 12-48 dB/oct => 1-4 cascaded 2nd-order sections.
+            // "Low Cut" = cut the LOWS = high-pass filter (decramped matched).
+            // Slope 12-48 dB/oct => 1-4 cascaded 2nd-order sections.
             const int n = std::max (1, std::min (4, (int)std::lround (br.slopeDbOct / 12.0)));
             for (int i = 0; i < n; ++i)
-                pushSvfCut (flush::SvFilter::Kind::HighPass);
+                pushSection (flush::matched::highpass (fs, f0, kCutQ));
             break;
         }
 
         case flush::Shape::HighCut: {
-            // "High Cut" = cut the HIGHS = low-pass filter.
+            // "High Cut" = cut the HIGHS = low-pass filter (decramped matched).
             const int n = std::max (1, std::min (4, (int)std::lround (br.slopeDbOct / 12.0)));
             for (int i = 0; i < n; ++i)
-                pushSvfCut (flush::SvFilter::Kind::LowPass);
+                pushSection (flush::matched::lowpass (fs, f0, kCutQ));
             break;
         }
 
@@ -477,6 +464,10 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
         p.rms         = false;
         p.adaptiveRelease = true;
         p.adaptiveAmount  = 4.0;
+        // NOTE: dynamic bands deliberately use NO lookahead — a short attack +
+        // adaptive release is the standard (and correct) dynamic-EQ behaviour;
+        // lookahead is a broadband limiter/compressor technique (Pro-Q does the
+        // same: dynamic bands have attack/release, no lookahead).
         // Reset the detector/ballistics state at the processing rate. NOTE: the
         // envelope state does not migrate across rebuilds (a coefficient edit
         // briefly re-triggers the band) — state migration is a later refinement.
@@ -514,15 +505,6 @@ void FlushAudioProcessor::publishUiSnapshot (double sampleRate)
 
 // Process one channel's cascade, returning the filtered sample.
 double FlushAudioProcessor::processBandChannel (std::vector<flush::MorphingBiquad>& sections, double in)
-{
-    double out = in;
-    for (auto& s : sections)
-        out = s.process (out);
-    return out;
-}
-
-// Process one channel's TPT/ZDF state-variable cascade (cut filters).
-double FlushAudioProcessor::processBandSv (std::vector<flush::SvFilter>& sections, double in)
 {
     double out = in;
     for (auto& s : sections)
@@ -592,13 +574,8 @@ void FlushAudioProcessor::processEqSample (double& m, double& s)
 
         // Filter the DRY signal at the band's full static gain.
         double bandM = dryM, bandS = dryS;
-        if (br.useSvf) {
-            if (useM) bandM = processBandSv (br.svfM, dryM);
-            if (useS) bandS = processBandSv (br.svfS, dryS);
-        } else {
-            if (useM) bandM = processBandChannel (br.sectionsM, dryM);
-            if (useS) bandS = processBandChannel (br.sectionsS, dryS);
-        }
+        if (useM) bandM = processBandChannel (br.sectionsM, dryM);
+        if (useS) bandS = processBandChannel (br.sectionsS, dryS);
 
         double k = 1.0;
         if (br.dynamic) {
@@ -723,10 +700,19 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         p.rms         = (compDet == 1);
         p.adaptiveRelease = true;   // transparent: heavy GR hangs, light GR lets go
         p.adaptiveAmount  = 4.0;
-        p.lookaheadSec    = 0.0015; // 1.5 ms lookahead: ramps the gain BEFORE the
-                                    // transient, so the attack never "grabs" —
-                                    // the Oxford-style transparent attack.
+        p.lookaheadSec    = 0.0015; // 1.5 ms lookahead: the AUDIO is delayed so the
+                                    // attack never "grabs" transients — the
+                                    // Oxford-style transparent attack.
         compressor_.setParams (p);
+
+        // Reconfigure the audio delay lines to match the lookahead (allocation
+        // happens here on the audio thread, but only when the delay length
+        // actually changes — it is a fixed 72 samples otherwise).
+        const int la = compressor_.lookaheadLatencySamples();
+        if (la != compDelayL_.delay) {
+            compDelayL_.setDelay (la);
+            compDelayR_.setDelay (la);
+        }
     }
 
     // Recompute latency AFTER the compressor config so the lookahead is counted
@@ -822,11 +808,16 @@ void FlushAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 spectralL_.process (&L, 1);
                 spectralR_.process (&R, 1);
             } else {
+                // Lookahead: the sidechain (undelayed) drives the GR, which is
+                // applied to the DELAYED audio — so the attack is fully ramped
+                // before the transient arrives. (A delayed GR on undelayed audio
+                // would lag the gain; this is the correct direction.)
                 const double sc = 0.5 * (L + R);
                 const double gr = compressor_.processGrDb (sc);
                 if (autoMk) makeupDb = compMk + compressor_.currentGrDb();
                 const double gain = dbToLin (-gr + makeupDb);
-                L *= gain; R *= gain;
+                L = compDelayL_.process (L) * gain;
+                R = compDelayR_.process (R) * gain;
             }
         }
 

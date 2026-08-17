@@ -31,10 +31,11 @@ struct DynamicsParams {
     bool   adaptiveRelease = true;
     double adaptiveAmount  = 4.0;   // 0 = fixed; ~4 = classic transparent hang
 
-    // Lookahead (seconds): the gain reduction is delayed by this amount so the
-    // attack can be fully ramped BEFORE a transient arrives — no initial "grab"
-    // distortion on transients. This is the signature of a transparent limiter/
-    // mastering compressor. 0 disables (adds no latency).
+    // Lookahead (seconds): the CALLER delays the audio by this amount and applies
+    // the (undelayed) gain reduction to the delayed audio, so the attack is fully
+    // ramped BEFORE a transient arrives — no initial "grab" distortion. The engine
+    // only REPORTS the latency; it never delays the GR itself (a delayed GR on
+    // undelayed audio would be a LAG, not a lookahead). 0 disables.
     double lookaheadSec = 0.0;
 };
 
@@ -46,8 +47,6 @@ public:
         lastRelGr_ = -1.0;
         rms_.reset();
         grSmooth_.reset();
-        grRing_.assign (std::max (1, lookaheadSamples_), 0.0);
-        grPos_ = 0;
         applyParams();
     }
 
@@ -63,16 +62,7 @@ public:
         p_.thresholdDb = sanitize(p.thresholdDb);
         p_.adaptiveAmount = std::max(0.0, sanitize(p.adaptiveAmount));
         p_.lookaheadSec   = std::max(0.0, std::min(0.05, sanitize(p.lookaheadSec)));
-
-        // Resize the lookahead ring ONLY when the delay actually changes (this
-        // runs on the audio thread every block — a resize per block would be a
-        // heap allocation; here it's a one-time event when the param changes).
-        const int la = (int)std::lround (p_.lookaheadSec * sr_);
-        if (la != lookaheadSamples_) {
-            lookaheadSamples_ = la;
-            grRing_.assign (std::max (1, lookaheadSamples_), 0.0);
-            grPos_ = 0;
-        }
+        lookaheadSamples_ = (int)std::lround (p_.lookaheadSec * sr_);
         applyParams();
     }
 
@@ -121,16 +111,6 @@ public:
             }
         }
 
-        // 5) lookahead: the CALLER applies the returned (delayed) GR to the
-        //    undelayed audio, so the gain ramp leads the transient. The ring
-        //    holds `lookaheadSamples_` past GR values; we return the oldest.
-        if (lookaheadSamples_ > 0) {
-            const double delayed = grRing_[grPos_];
-            grRing_[grPos_] = gr;
-            grPos_ = (grPos_ + 1) % std::max (1, lookaheadSamples_);
-            return delayed;
-        }
-
         return gr;
     }
 
@@ -158,10 +138,7 @@ private:
     double lastRelGr_ = -1.0;
     OnePole rms_;
     OnePole grSmooth_;
-
     int lookaheadSamples_ = 0;
-    std::vector<double> grRing_;
-    int grPos_ = 0;
 };
 
 } // namespace flush

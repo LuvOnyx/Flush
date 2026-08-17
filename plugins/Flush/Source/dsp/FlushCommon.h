@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <vector>
 
 namespace flush {
 
@@ -37,6 +38,32 @@ struct OnePole {
     void reset() { y = 0.0; }
     double update(double x) { y += a * (sanitize(x) - y); return y; }
     double value() const { return y; }
+};
+
+// Simple integer-sample delay line (for compressor lookahead: the audio is
+// delayed, the undelayed gain reduction is applied to it). Delay is set once at
+// configure time; process() is allocation-free.
+struct DelayLine {
+    std::vector<double> buf;
+    int delay = 0;
+    int pos = 0;
+
+    void setDelay(int d) {
+        delay = std::max(0, d);
+        // Buffer of exactly `delay` slots: read-then-write at `pos` yields a
+        // delay of exactly `delay` samples (a size of delay+1 would be one
+        // sample too long — the impulse-delay test caught this off-by-one).
+        buf.assign(std::max(1, delay), 0.0);
+        pos = 0;
+    }
+
+    double process(double x) {
+        if (delay == 0) return sanitize(x);
+        const double y = buf[pos];
+        buf[pos] = sanitize(x);
+        pos = (pos + 1) % (int)buf.size();
+        return y;
+    }
 };
 
 } // namespace flush

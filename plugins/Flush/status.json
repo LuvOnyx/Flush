@@ -5,7 +5,7 @@
   "ui_framework": "visage",
   "complexity_score": 4,
   "created_at": "2026-08-15T20:55:09Z",
-  "last_modified": "2026-08-16T04:00:00Z",
+  "last_modified": "2026-08-16T04:30:00Z",
   "phase_history": [
     {
       "phase": "ideation_complete",
@@ -31,7 +31,7 @@
       "phase": "code_in_progress",
       "completed_at": "2026-08-15T23:10:00Z",
       "framework_selected": "visage",
-      "notes": "SOLO + DSP QUALITY + ANALYZER pass (80/80 DSP assertions). DSP QUALITY FIX: the EQ was a SERIAL cascade (each band filtered the previous band's already-modified signal -> bands interacted); now PARALLEL (each band filters the DRY signal and contributes a delta, Pro-Q style) — the defining difference for 'Oxford-grade' transparency. BAND SOLO: with parallel topology, delta solo now works — soloing a band plays ONLY that band's contribution (what it adds/removes at its frequency), which is the Pro-Q 'listen to the band' behaviour. COMPRESSOR LOOKAHEAD: 1.5ms lookahead added to the shared DynamicsEngine so the gain ramps BEFORE a transient (no attack grab) — verified (48-sample delay @48k, delayed GR 0 during the window then 7.5dB) and reported to the host via setLatencySamples. ANALYZER: proper FREEZE (hard snapshot — verified it holds while live audio continues, and resumes on unfreeze) + PRE/POST source switch (input vs post-EQ output) + a Freeze/In-Out toolbar on the EQ display. KNOWN BOUNDARY (unchanged, honest): the JUCE/Visage layer is still uncompiled here; first build + visual fine-tune remains the local agent's job (see HANDOFF.md)."
+      "notes": "DSP QUALITY PASS toward 'greatest sounding EQ' (81/81 DSP assertions). THREE changes. (1) DECRAMPED CUTS: LowCut/HighCut were still a bilinear SVF, which re-cramped the high-frequency response (the exact artifact matched bells/shelves already avoid); they now use the Vicanek matched LP/HP. Verified: a 1kHz high-cut at 20kHz tracks the analog rolloff at -50.99 dB (analog -52.04) vs the old bilinear -70.22 dB — 18 dB of 'closed top end' cramping eliminated. Every audible-magnitude shape (bell/shelf/cut/band-pass) is now decramped; only notch/all-pass remain RBJ (no matched variant exists). (2) COMPRESSOR LOOKAHEAD FIXED: my previous lookahead delayed the GR (a LAG, which makes the attack WORSE) on undelayed audio; corrected to delay the AUDIO and apply the undelayed GR, plus fixed a 1-sample DelayLine off-by-one the impulse test caught. (3) DYNAMIC-BAND LOOKAHEAD REMOVED: dynamic EQ correctly uses short attack + adaptive release with no lookahead (matching Pro-Q). RETAINED for the frontier: the TPT/ZDF SvFilter primitive (still tested) — the path to the analog-matched SVF (Cytomic-style, solving g/k from the Orfanidis prototype) which is the remaining reference-grade step; documented, not attempted without authoritative equations. KNOWN BOUNDARY (unchanged): JUCE/Visage layer still uncompiled here (see HANDOFF.md)."
     }
   ],
   "validation": {
@@ -78,7 +78,9 @@
     "ui_scaling_refresh": "COMPLETE (ui_scale 0.5-2.0 grows the window; fps_mode 60/120/uncapped drives the repaint timer)",
     "band_solo": "COMPLETE (delta solo: hear ONLY a soloed band's contribution, parallel topology)",
     "parallel_eq_topology": "COMPLETE (bands filter the DRY signal and sum deltas; was a serial cascade before — bands no longer interact, Pro-Q style)",
-    "compressor_lookahead": "COMPLETE (1.5ms lookahead -> transparent attack; verified 48-sample delay @48k; reported to host)",
+    "decramped_cuts": "COMPLETE (cuts now use matched LP/HP — was bilinear SVF re-cramping ~18dB near Nyquist; verified -50.99 dB vs RBJ -70.22 dB @20k high-cut)",
+    "compressor_lookahead": "COMPLETE + FIXED (was a LAG — delayed GR on undelayed audio; now delayed AUDIO + undelayed GR, the correct direction; also fixed a 1-sample DelayLine off-by-one caught by the impulse test)",
+    "dynamic_band_lookahead": "REMOVED (correctly — dynamic EQ uses short attack + adaptive release, no lookahead, matching Pro-Q)",
     "analyzer_freeze": "COMPLETE (hard snapshot freeze, verified)",
     "analyzer_source": "COMPLETE (pre/post-EQ analyzer source switch)",
     "visage_ui": "WRITTEN (FabFilter-grade: gradients, per-band colours, hover/glow, Q editing, value bubbles, selected-band strip, theming, scaling, 120Hz, freeze + in/out toolbar; uncompiled in this env)",

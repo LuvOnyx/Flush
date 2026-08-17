@@ -839,7 +839,7 @@ int main() {
         CHECK("kaiserWindow(0) = empty", w0.empty(), "empty");
     }
 
-    // ---- 32. Compressor lookahead delays the gain (transparent attack) -----
+    // ---- 32. Compressor lookahead: audio delay + undelayed GR --------------
     {
         DynamicsParams p; p.thresholdDb = -10.0; p.ratio = 4.0;
         p.attackSec = 0.0001; p.releaseSec = 0.05; p.kneeDb = 0.0; p.rangeDb = 60.0;
@@ -850,19 +850,24 @@ int main() {
         CHECK("Lookahead latency = 48 samples @ 48kHz", K == 48,
               ("K " + std::to_string(K)).c_str());
 
-        double grFirstMax = 0.0;
-        for (int i = 0; i < K; ++i)
-            grFirstMax = std::max (grFirstMax, eng.processGrDb (1.0));   // DC loud
+        // The engine returns the UNDELAYED GR (no internal delay): with a
+        // ~5-sample attack, the GR should have risen well within the lookahead
+        // window (if the engine delayed the GR internally, it would still be 0
+        // after 48 samples).
+        double grNow = 0.0;
+        for (int i = 0; i < 16; ++i) grNow = eng.processGrDb (1.0);
+        CHECK("Engine returns undelayed GR (rises within the lookahead window)",
+              grNow > 1.0, ("gr " + std::to_string(grNow) + " dB").c_str());
 
-        CHECK("Envelope rises immediately (undelayed)", eng.envDb() > -12.0,
-              ("env " + std::to_string(eng.envDb()) + " dB").c_str());
-        CHECK("Delayed GR stays ~0 during the lookahead window", grFirstMax < 0.5,
-              ("max " + std::to_string(grFirstMax) + " dB").c_str());
-
-        double grFinal = 0.0;
-        for (int i = 0; i < K * 2; ++i) grFinal = eng.processGrDb (1.0);
-        CHECK("Delayed GR reaches steady state after lookahead",
-              std::fabs (grFinal - 7.5) < 0.1, ("gr " + std::to_string(grFinal) + " dB").c_str());
+        // The audio is delayed by the lookahead (DelayLine), NOT the GR.
+        DelayLine dl; dl.setDelay (K);
+        int peakIdx = 0; double peakVal = 0.0;
+        for (int i = 0; i < 4096; ++i) {
+            const double out = dl.process ((i == 0) ? 1.0 : 0.0);
+            if (out > peakVal) { peakVal = out; peakIdx = i; }
+        }
+        CHECK("DelayLine delays the audio by exactly the lookahead",
+              peakIdx == K, ("impulse at " + std::to_string(peakIdx)).c_str());
     }
 
     // ---- 33. Analyzer freeze holds a hard snapshot -------------------------
@@ -898,6 +903,30 @@ int main() {
         const double f3 = (double)p3 * (fs / 2.0) / (mags3.size() - 1);
         CHECK("Unfreeze resumes tracking (peak moves to 6 kHz)",
               std::fabs (f3 - 6000.0) < 250.0, ("peak " + std::to_string((int)f3) + " Hz").c_str());
+    }
+
+    // ---- 34. Matched cuts are decramped near Nyquist -----------------------
+    {
+        // 2nd-order Butterworth (12 dB/oct) lowpass at 1 kHz. The analog
+        // prototype's magnitude at 20 kHz is 1/sqrt(1+(20)^4) = -52.04 dB.
+        // The bilinear (RBJ) design goes STEEPER than the analog prototype near
+        // Nyquist ("cramping"); the matched design tracks the analog prototype.
+        const double analogDb = 20.0 * std::log10 (1.0 / std::sqrt (1.0 + std::pow (20.0, 4.0)));
+
+        Biquad rbjLp; rbjLp.setCoef (rbj::lowpass (fs, 1000.0, 0.7071067811865476));
+        const double rbjDb = measureGainDb ([&](double x){ return rbjLp.process (x); }, fs, 20000.0);
+
+        Biquad matLp; matLp.setCoef (matched::lowpass (fs, 1000.0, 0.7071067811865476));
+        const double matDb = measureGainDb ([&](double x){ return matLp.process (x); }, fs, 20000.0);
+
+        std::printf("         high-cut @20k: analog %.2f dB, matched %.2f dB, RBJ %.2f dB\n",
+                    analogDb, matDb, rbjDb);
+        CHECK("Matched cut tracks the analog rolloff (decramped)",
+              std::fabs (matDb - analogDb) < 3.0,
+              ("matched " + std::to_string(matDb) + " vs analog " + std::to_string(analogDb)).c_str());
+        CHECK("RBJ cut cramps (steeper than analog)",
+              rbjDb < analogDb - 3.0,
+              ("RBJ " + std::to_string(rbjDb) + " vs analog " + std::to_string(analogDb)).c_str());
     }
 
     std::printf("\n%s — %d failure(s)\n", g_failures ? "FAILED" : "ALL PASSED", g_failures);

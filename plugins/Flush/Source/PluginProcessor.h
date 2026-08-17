@@ -127,17 +127,11 @@ private:
         // Parallel band-split: out = in + k * (bandOut - in), k = dynamic gain.
         // Cuts are multi-section cascades; each channel keeps its own state.
         // Sections morph (output-crossfade) on coefficient change — click-free
-        // automation of gain/freq/Q on every band.
-        //
-        // Cut filters (LowCut/HighCut) run on the TPT/ZDF state-variable filter
-        // (denormal-free, low-frequency stable) instead of the DF-II biquads;
-        // `coefs` still holds the equivalent magnitude response so the FIR
-        // designer and UI curve stay consistent with what the SVF actually does.
+        // automation of gain/freq/Q on every band. All shapes (including cuts
+        // and band-pass) use the decramped matched designs; `coefs` mirrors the
+        // exact magnitude so the FIR designer and UI curve stay in sync.
         std::vector<flush::MorphingBiquad> sectionsM;
         std::vector<flush::MorphingBiquad> sectionsS;
-        std::vector<flush::SvFilter> svfM;
-        std::vector<flush::SvFilter> svfS;
-        bool useSvf = false;
         std::vector<flush::BiquadCoef> coefs;   // per-section coefficients (for FIR design)
         flush::DynamicsEngine dyn;
     };
@@ -147,7 +141,6 @@ private:
     void ensureBandCount();               // normalize BANDS child count to kMaxBands
     void publishUiSnapshot (double sampleRate);
     double processBandChannel (std::vector<flush::MorphingBiquad>& sections, double in);
-    double processBandSv (std::vector<flush::SvFilter>& sections, double in);
     void processEqSample (double& m, double& s);
     double bandMagnitudeAt (int index, double f) const;
     void rebuildLinearFir();
@@ -211,6 +204,10 @@ private:
     // Spectral dynamics (compressor mode "Spectral"), stereo.
     flush::SpectralDynamics spectralL_, spectralR_;
     bool spectralActive_ = false;
+
+    // Compressor lookahead: the AUDIO is delayed (L/R) so the undelayed gain
+    // reduction can be ramped before the transient arrives.
+    flush::DelayLine compDelayL_, compDelayR_;
 
     // Linear-phase path: one combined FIR for the static EQ (M and S).
     flush::FirFilter linearFirM_, linearFirS_;

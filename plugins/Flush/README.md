@@ -10,7 +10,7 @@ Native C++ (Visage) UI. Built with APC / JUCE 9.
 
 | Section | What |
 |---|---|
-| **24-band dynamic EQ** | **Parallel topology** (each band filters the dry signal and sums its delta — bands don't interact); Bell, Notch, shelves, cuts (**12–48 dB/oct**), Band Pass, Tilt, Flat Tilt, All Pass; **every node supports dynamic mode** (threshold/range/attack/release); per-band **Stereo / Mid / Side** placement; **band solo** (hear only a band's contribution) |
+| **24-band dynamic EQ** | **Parallel topology** (each band filters the dry signal and sums its delta — bands don't interact); Bell, Notch, shelves, **decramped cuts (12–48 dB/oct)**, Band Pass, Tilt, Flat Tilt, All Pass — **every audible-magnitude shape is decramped**; **every node supports dynamic mode** (threshold/range/attack/release); per-band **Stereo / Mid / Side** placement; **band solo** (hear only a band's contribution) |
 | **Phase modes** | Low Latency (Vicanek matched) / Natural (Orfanidis decramped) / **Linear (Kaiser-FIR, latency-reported)** |
 | **Flush Match** (hero) | Auto output gain: **Match Input** (tone changes, level stays) or **Target Level** (normalize into the limiter). Bus-safe timing, Mid or Stereo reference — measured on **ITU-R BS.1770-4 K-weighted loudness**, not RMS |
 | **Glue compressor** | Broadband instance of the shared dynamics engine, **Sonnox-Oxford-style transparent** (soft knee + adaptive release + **1.5 ms lookahead**), auto-makeup + GR meter — or switch to **Spectral** mode (per-frequency dynamics) |
@@ -91,7 +91,7 @@ cd plugins/Flush/tests
 g++ -std=c++20 -O2 -I../Source/dsp dsp_smoke.cpp -o dsp_smoke && ./dsp_smoke
 ```
 
-80 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
+81 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
 LP/HP −3.01 dB @ fc, a three-way no-cramp comparison (RBJ 47% vs Vicanek 7% vs Orfanidis
 2.1%), decramped shelves vs the analog prototype, TPT/ZDF SVF, coefficient morphing,
 Oxford-style adaptive release, Flush Match (K-weighted) neutralizing a +6 dB change and
@@ -117,9 +117,10 @@ or use `scripts/build-and-install.sh -PluginName Flush` (honors `apc.config.json
 
 - [x] Concept + architecture (dream/plan) — `status.json`
 - [x] Design v2 (Pro-Q4 recreation spec) — `Design/v2-ui-spec.md`
-- [x] DSP core — written + **verified** (80/80 tests): filters, dynamics, loudness, FFT,
-      linear-phase FIR, 2x/4x oversampling, analyzer (freeze + source), spectral dynamics,
-      gain-Q, SVF cuts, oversampler impulse-delay (half-sample phase fixed), compressor lookahead
+- [x] DSP core — written + **verified** (81/81 tests): filters (all decramped), dynamics, loudness,
+      FFT, linear-phase FIR, 2x/4x oversampling, analyzer (freeze + source), spectral dynamics,
+      gain-Q, oversampler impulse-delay (half-sample phase fixed), compressor lookahead
+      (correct direction + 1-sample delay-line fix)
 - [x] JUCE processor — APVTS + 24-band state + full chain (linear FIR w/ quality tiers,
       2x/4x oversampling, spectral mode, analyzer, metering, latency) + factory presets + A/B + band solo
 - [x] Visage UI (FabFilter-grade: vertical gradients, per-band colour nodes + hover glow,
