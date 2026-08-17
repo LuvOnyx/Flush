@@ -76,6 +76,30 @@ public:
         dispatchMouse(e, MouseDispatch::Move);
     }
 
+    // Forward a small, safe set of editing keys to the Visage frame tree. The
+    // DAW/host may or may not grant the editor keyboard focus; when it does,
+    // delete/backspace/arrows reach the active UI. Returns false for anything
+    // we don't handle (so the host can keep it).
+    bool keyPressed(const juce::KeyPress& key) override {
+        if (!event_root_)
+            return false;
+
+        visage::KeyCode code = visage::KeyCode::Unknown;
+        if (key == juce::KeyPress::backspaceKey)      code = visage::KeyCode::Backspace;
+        else if (key == juce::KeyPress::deleteKey)    code = visage::KeyCode::Delete;
+        else if (key == juce::KeyPress::upKey)        code = visage::KeyCode::Up;
+        else if (key == juce::KeyPress::downKey)      code = visage::KeyCode::Down;
+        else if (key == juce::KeyPress::leftKey)      code = visage::KeyCode::Left;
+        else if (key == juce::KeyPress::rightKey)     code = visage::KeyCode::Right;
+        else if (key == juce::KeyPress::escapeKey)    code = visage::KeyCode::Escape;
+        else if (key == juce::KeyPress::returnKey)    code = visage::KeyCode::Return;
+        else
+            return false;
+
+        visage::KeyEvent evt(code, 0, true, false);
+        return event_root_->processKeyPress(evt);
+    }
+
     void resized() override { 
         onResize(getWidth(), getHeight()); 
         if (canvas_) {
@@ -111,6 +135,14 @@ public:
     virtual void onRender() {}
     virtual void onDestroy() {}
     virtual void onResize(int w, int h) {}
+
+    // Change the repaint rate at runtime (60 / 120 / uncapped). The timer is the
+    // only thing that drives `onRender`, so this is the "UI refresh" knob.
+    void setRefreshHz(int hz) {
+        if (hz <= 0) hz = 240;                       // "uncapped" -> host-limited
+        stopTimer();
+        startTimerHz(hz);
+    }
 
 protected:
     visage::Canvas& getCanvas() { return *canvas_; }
@@ -199,11 +231,51 @@ private:
         if (!event_root_)
             return;
 
+        // --- hit-test + coordinate conversion (matches Visage's own
+        //     window_event_handler.cpp) -------------------------------------
+        // Visage hit-testing and layout use LOGICAL (DPI-scaled) coordinates,
+        // while JUCE delivers NATIVE pixels. The root frame sits at the editor
+        // origin, so the editor position == the Visage window position, divided
+        // by the desktop scale factor.
+        const float scale = std::max (1.0f, (float)getDesktopScaleFactor());
+        const visage::Point windowPos {
+            static_cast<float>(e.position.x) / scale,
+            static_cast<float>(e.position.y) / scale
+        };
+
+        // Down / Move re-hit-test the deepest frame under the cursor; Drag / Up
+        // continue on the frame that received the Down (so a knob keeps the drag
+        // even if the cursor leaves its bounds).
+        visage::Frame* target = nullptr;
+        switch (type) {
+            case MouseDispatch::Down:
+                target = event_root_->frameAtPoint (windowPos);
+                mouse_down_frame_ = (target != nullptr) ? target : event_root_;
+                target = mouse_down_frame_;
+                break;
+            case MouseDispatch::Drag:
+            case MouseDispatch::Up:
+                target = mouse_down_frame_ ? mouse_down_frame_ : event_root_;
+                if (type == MouseDispatch::Up)
+                    mouse_down_frame_ = nullptr;
+                break;
+            case MouseDispatch::Move:
+                target = event_root_->frameAtPoint (windowPos);
+                if (target == nullptr)
+                    target = event_root_;
+                break;
+        }
+        if (target == nullptr)
+            return;
+
+        // Convert the window position into the target frame's local coordinates.
+        const visage::Point localPos = windowPos - target->positionInWindow();
+
         visage::MouseEvent me;
-        me.event_frame = event_root_;
-        me.position = { static_cast<float>(e.position.x), static_cast<float>(e.position.y) };
-        me.relative_position = me.position;
-        me.window_position = { static_cast<float>(e.getScreenX()), static_cast<float>(e.getScreenY()) };
+        me.event_frame = target;
+        me.position = localPos;
+        me.relative_position = localPos;
+        me.window_position = windowPos;
 
         int mods = visage::kModifierNone;
         if (e.mods.isShiftDown()) mods |= visage::kModifierShift;
@@ -228,10 +300,10 @@ private:
         me.is_down = (type != MouseDispatch::Up);
 
         switch (type) {
-            case MouseDispatch::Down: event_root_->processMouseDown(me); break;
-            case MouseDispatch::Drag: event_root_->processMouseDrag(me); break;
-            case MouseDispatch::Up:   event_root_->processMouseUp(me); break;
-            case MouseDispatch::Move: event_root_->processMouseMove(me); break;
+            case MouseDispatch::Down: target->processMouseDown (me); break;
+            case MouseDispatch::Drag: target->processMouseDrag (me); break;
+            case MouseDispatch::Up:   target->processMouseUp   (me); break;
+            case MouseDispatch::Move: target->processMouseMove (me); break;
         }
     }
 
@@ -320,5 +392,6 @@ private:
     bool windowless_ = false;
     juce::Image backbuffer_;
     visage::Frame* event_root_ = nullptr;
+    visage::Frame* mouse_down_frame_ = nullptr;   // receives Drag/Up after a Down
     visage::MouseButton last_button_id_ = visage::kMouseButtonLeft;
 };

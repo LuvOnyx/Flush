@@ -1,0 +1,88 @@
+{
+  "plugin_name": "Flush",
+  "version": "v0.0.0",
+  "current_phase": "design_complete",
+  "ui_framework": "visage",
+  "complexity_score": 4,
+  "created_at": "2026-08-15T20:55:09Z",
+  "last_modified": "2026-08-16T03:30:00Z",
+  "phase_history": [
+    {
+      "phase": "ideation_complete",
+      "completed_at": "2026-08-15T20:55:09Z",
+      "framework_selected": null,
+      "notes": "Gain-staged channel strip for modern rap/RnB/drill. Hero feature: Flush Match (automatic input-vs-output loudness matching) so the user never has to guess the output knob after EQ/compression."
+    },
+    {
+      "phase": "plan_complete",
+      "completed_at": "2026-08-15T20:55:09Z",
+      "framework_selected": "visage",
+      "notes": "Signal flow: Input Trim -> EQ -> Compressor -> Flush Match -> Output. Complexity 3/5. Visage (pure C++) chosen for a FabFilter-style native front end. Mixbus primary use case; M/S + correlation metering; phase-fixing tools deferred to v2."
+    },
+    {
+      "phase": "design_complete",
+      "completed_at": "2026-08-15T22:00:00Z",
+      "framework_selected": "visage",
+      "final_version": "v3",
+      "iterations": 3,
+      "notes": "Pro-Q4-class 24-band dynamic EQ + Flush Match + glue compressor. Complexity 4/5. UNIFIED DYNAMICS ENGINE: one shared detector/gain-computer/ballistics core powers BOTH the glue compressor (broadband instance) and every dynamic EQ band (band-limited instance) - the compressor IS the engine behind dynamic mode. Sound quality is the product: double precision, analog-matched (Orfanidis) biquads, gain-Q interaction, Kaiser-FIR linear phase, 2x/4x oversampling, sample-accurate smoothing, denormal protection. v2 design kept: Pro-Q4 recreation (neon glow nodes/bands/lines, per-band colors), preset browser + A/B, settings modal (UI scaling + accent + refresh), uncapped render loop >=120 Hz, VU<->bar meter toggle, high-quality FFT analyzer. Honest quality goal: reference-class architecture + iterative parity toward FabFilter/Sonnox."
+    },
+    {
+      "phase": "code_in_progress",
+      "completed_at": "2026-08-15T23:10:00Z",
+      "framework_selected": "visage",
+      "notes": "UI OVERHAUL toward the FabFilter bar (74/74 DSP assertions still pass). ADDED: Q editing (the missing core feature) via mouse wheel over a node + value scrubbing; a selected-band editor strip (type cycle + FREQ/GAIN/Q scrubbers + DYN/SOLO toggles, proportional layout); per-band colour nodes with hover + glow halos; value bubbles while dragging/scrubbing; real vertical gradients (Brush::vertical) on the panel, knobs, meters, GR meter, analyzer, preset bar, modal — no more flat fills; dB scale labels on the EQ plot; hover states on knobs + choice buttons + mouse wheel on knobs; dynamic accent theming (theme_accent actually drives the colours now, with per-band hue wheel); UI SCALING wired (ui_scale 0.5-2.0 resizes the plugin window via the editor) and a 120 Hz / uncapped render loop (fps_mode drives setRefreshHz). KNOWN BOUNDARY (unchanged, honest): the JUCE/Visage layer is written against the verified Visage API (Brush::vertical, Color::toARGB/withAlpha/interpolateWith, PopupMenu, frameAtPoint, KeyEvent) but has never been compiled in this sandbox — first build + visual fine-tune remains the local agent's job (see HANDOFF.md)."
+    }
+  ],
+  "validation": {
+    "creative_brief_exists": true,
+    "parameter_spec_exists": true,
+    "architecture_defined": true,
+    "ui_framework_selected": true,
+    "design_complete": true,
+    "code_complete": false,
+    "tests_passed": false,
+    "ship_ready": false
+  },
+  "framework_selection": {
+    "decision": "visage",
+    "rationale": "User explicitly wants a FabFilter Pro-Q4-like C++ front end that does not feel web appy. Visage (pure C++, GPU-rendered) delivers native neon-glow knobs/nodes, meters, and a 120 Hz+ render loop with no web stack. Best fit for the interactive EQ display + high-quality analyzer + settings modal.",
+    "implementation_strategy": "phased"
+  },
+  "implementation_progress": {
+    "dsp_core": "COMPLETE (47/47 tests passing)",
+    "filter_family": "RBJ demoted to baseline; Vicanek matched + Orfanidis decramped + Vicanek matched shelves in use",
+    "cut_slopes": "COMPLETE (12-48 dB/oct, cascaded matched sections)",
+    "dynamic_per_node": "COMPLETE (every node supports dynamic + Oxford-style adaptive release)",
+    "precision_topology": "COMPLETE (TPT/ZDF SVF + coefficient morphing)",
+    "loudness_native": "COMPLETE (BS.1770-4 K-weighting matched to 0.000000 dB + true-peak)",
+    "linear_phase_fir": "COMPLETE (Kaiser FIR, symmetry 3.8e-17, latency reported)",
+    "oversampling": "COMPLETE (2x image -72 dB + 4x cascade, both verified)",
+    "spectral_dynamics": "COMPLETE (FFT per-frequency dynamics, overlap-add; verified)",
+    "gain_q_link": "COMPLETE (analog-style Q narrowing with gain; verified)",
+    "spectrum_analyzer": "COMPLETE (Hann FFT, overlap, tilt, peak hold, max-in-band)",
+    "processor": "COMPLETE (APVTS + 24-band state + chain incl. linear FIR + 2x/4x oversampling + spectral mode + analyzer + metering + latency)",
+    "factory_presets": "COMPLETE (7 presets) + A/B compare slots",
+    "svf_cuts": "COMPLETE (LowCut/HighCut run on TPT/ZDF SVF; verified 8th-order -12.04 dB @ fc)",
+    "cut_type_fix": "COMPLETE (LowCut=high-pass / HighCut=low-pass semantics corrected)",
+    "band_solo": "COMPLETE (soloed bands isolate, Pro-Q style)",
+    "fir_quality_tiers": "COMPLETE (Low/Medium/High/Max -> 511/1023/2047/4095 taps)",
+    "hardening": "COMPLETE (per-band dyn sample-rate fix, spectral GR meter, UI curve snapshot mutex, atomic dirty flags, latency-report ordering, const-correctness fix in processEqSample)",
+    "ui_polish": "COMPLETE (knob track arc, drawn gear icon, on/off toggles, GR meter, analyzer top-edge, numeric meter readouts, toolbar layout)",
+    "bulletproofing": "COMPLETE (NaN/Inf sanitization, Q/freq/param clamps, FFT power-of-2 + null guards, channel edge cases, null-safe param reads + ID validation, band-count normalization, try/catch state restore, bounded audio-thread alloc, render geometry guards)",
+    "band_thread_safety": "COMPLETE (bandTree private + bandMutex_; locked snapshot accessors + add/remove/move/type/dynamic/solo editing API)",
+    "oversampler_phase_fix": "COMPLETE (downsampler kept odd phase = half-sample error; now even phase + 97-tap integer latency; verified 48/72-sample impulse delay)",
+    "mouse_routing_fix": "COMPLETE (bridge hit-tests to deepest child frame via frameAtPoint + native->logical conversion + mouse_down_frame drag tracking)",
+    "ui_interactions": "COMPLETE (right-click context menu on nodes, double-click add band / reset node, keyboard delete/backspace/arrows, Q via mouse wheel, value scrubbing in selected-band strip)",
+    "ui_visuals": "COMPLETE (real vertical gradients via Brush, per-band colour nodes + hover glow, value bubbles, selected-band editor strip, dynamic accent theming, dB scale labels)",
+    "ui_scaling_refresh": "COMPLETE (ui_scale 0.5-2.0 grows the window; fps_mode 60/120/uncapped drives the repaint timer)",
+    "visage_ui": "WRITTEN (FabFilter-grade: gradients, per-band colours, hover/glow, Q editing, value bubbles, selected-band strip, theming, scaling, 120Hz; uncompiled in this env)",
+    "user_presets_save_load": "PENDING (format defined)",
+    "compile": "PENDING (needs cmake + platform libs)"
+  },
+  "error_recovery": {
+    "last_backup": null,
+    "rollback_available": false,
+    "error_log": []
+  }
+}
