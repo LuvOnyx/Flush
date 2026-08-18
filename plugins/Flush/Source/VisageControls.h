@@ -613,8 +613,8 @@ public:
     // Proportional strip layout so the selected-band controls never clip at
     // small UI scales (the EQ display can be as narrow as ~230 px at 0.5x).
     struct StripLayout {
-        float pad, typeW, valW, tglW;
-        float typeX, freqX, gainX, qX, dynX, soloX, y, h;
+        float pad, typeW, valW, tglW, chW;
+        float typeX, freqX, gainX, qX, dynX, soloX, chX, y, h;
     };
     StripLayout stripLayout() const
     {
@@ -623,13 +623,16 @@ public:
         s.pad = 6.0f;
         s.typeW = std::min (100.0f, width() * 0.24f);
         s.tglW = 40.0f;
-        s.valW = std::max (30.0f, (width() - s.pad * 2.0f - s.typeW - s.tglW * 2.0f - 12.0f) / 3.0f);
+        s.chW  = 48.0f;
+        s.valW = std::max (30.0f,
+            (width() - s.pad * 2.0f - s.typeW - s.tglW * 2.0f - s.chW - 16.0f) / 3.0f);
         s.typeX = s.pad;
         s.freqX = s.typeX + s.typeW + 4.0f;
         s.gainX = s.freqX + s.valW;
         s.qX    = s.gainX + s.valW;
         s.dynX  = s.qX + s.valW + 8.0f;
         s.soloX = s.dynX + s.tglW;
+        s.chX   = s.soloX + s.tglW + 4.0f;
         return s;
     }
 
@@ -677,6 +680,7 @@ public:
         const double q = b.getProperty ("q", 1.0);
         const bool dyn = (bool)b.getProperty ("dynamic", false);
         const bool solo = (bool)b.getProperty ("solo", false);
+        const int  ch  = juce::jlimit (0, 2, (int)b.getProperty ("channel", 0));
 
         static constexpr const char* kShapeNames[] = {
             "Bell", "Notch", "Low Shelf", "High Shelf", "Low Cut",
@@ -703,6 +707,13 @@ public:
         canvas.text ("SOLO", smallFont_, visage::Font::kCenter, s.soloX, s.y + 5.0f, s.tglW, 10.0f);
         canvas.setColor (solo ? accentSoft : C::surface2);
         canvas.circle (s.soloX + s.tglW * 0.5f - 5.0f, s.y + 16.0f, 10.0f);
+
+        // Channel button (Stereo / Mid / Side), click-cycles.
+        static constexpr const char* kChNames[] = { "STEREO", "MID", "SIDE" };
+        canvas.setColor (ch != 0 ? accent : C::label);
+        canvas.text ("CH", smallFont_, visage::Font::kCenter, s.chX, s.y + 4.0f, s.chW, 9.0f);
+        canvas.setColor (ch != 0 ? accent : C::text);
+        canvas.text (kChNames[ch], smallFont_, visage::Font::kCenter, s.chX, s.y + 15.0f, s.chW, 10.0f);
     }
 
     void drawScrub (visage::Canvas& canvas, int field, float x, float y, float w,
@@ -957,6 +968,14 @@ private:
             redraw();
             return;
         }
+        // Channel (Stereo/Mid/Side) cycle.
+        if (x >= s.chX && x <= s.chX + s.chW) {
+            auto b = processor_.getBand (selected_);
+            const int ch = juce::jlimit (0, 2, (int)b.getProperty ("channel", 0));
+            processor_.setBandChannel (selected_, (ch + 1) % 3);
+            redraw();
+            return;
+        }
         // Freq/Gain/Q scrubbing.
         const float zones[3] = { s.freqX, s.gainX, s.qX };
         for (int fld = 0; fld < 3; ++fld) {
@@ -1025,6 +1044,13 @@ private:
             for (int s = 0; s < 10; ++s)
                 typeMenu.addOption (1000 + s, visage::String (kShapeNames[s]));
             contextMenu_.addSubMenu (std::move (typeMenu));
+
+            visage::PopupMenu chMenu ("Channel");
+            chMenu.addOption (4000, visage::String ("Stereo"));
+            chMenu.addOption (4001, visage::String ("Mid"));
+            chMenu.addOption (4002, visage::String ("Side"));
+            contextMenu_.addSubMenu (std::move (chMenu));
+
             contextMenu_.addOption (2000, visage::String ("Dynamic"));
             contextMenu_.addOption (2001, visage::String ("Solo"));
             contextMenu_.addBreak();
@@ -1036,6 +1062,8 @@ private:
         contextMenu_.onSelection().add ([this, addFreq] (int id) {
             if (id >= 1000 && id < 2000) {
                 if (selected_ >= 0) processor_.setBandType (selected_, id - 1000);
+            } else if (id >= 4000 && id < 4003 && selected_ >= 0) {
+                processor_.setBandChannel (selected_, id - 4000);
             } else if (id == 2000 && selected_ >= 0) {
                 auto b = processor_.getBand (selected_);
                 processor_.setBandDynamic (selected_, !(bool)b.getProperty ("dynamic", false));

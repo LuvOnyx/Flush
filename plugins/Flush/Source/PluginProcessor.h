@@ -89,6 +89,7 @@ public:
     void setBandGain (int index, double gainDb);
     void setBandQ (int index, double q);
     void setBandType (int index, int shape);
+    void setBandChannel (int index, int channel);   // 0 stereo, 1 mid, 2 side
     void setBandDynamic (int index, bool on);
     void setBandSolo (int index, bool on);
 
@@ -148,7 +149,7 @@ private:
     void publishUiSnapshot (double sampleRate);
     double processBandChannel (std::vector<flush::MorphingBiquad>& sections, double in);
     void processEqSample (double& m, double& s);
-    double staticEqMagnitudeLinear (double f) const;   // |1 + Σ(H_i - 1)|, static bands
+    void staticPathResponses (double f, flush::Complex& mid, flush::Complex& side) const;
     void rebuildLinearFir();
 
     // UI thread reads the EQ curve from a mutex-guarded snapshot of the band
@@ -157,6 +158,7 @@ private:
     mutable std::mutex uiMutex_;
     std::array<std::vector<flush::BiquadCoef>, kMaxBands> uiCoefs_;
     std::array<bool, kMaxBands> uiEnabled_ {};
+    std::array<int, kMaxBands> uiChannel_ {};
     double uiProcRate_ = 48000.0;
 
     int phaseMode() const;               // 0 low-latency, 1 natural, 2 linear

@@ -431,6 +431,11 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
             break;
 
         case flush::Shape::Notch:
+            // RBJ notch: its zeros sit ON the unit circle -> a perfect null at
+            // the center frequency (the notch's most important property). No
+            // matched/decramped notch exists in the public literature I have;
+            // a matched-bandpass-based notch only nulls ~ -20 dB (the bandpass
+            // has non-zero phase at center), which is not an acceptable notch.
             pushSection (flush::rbj::notch (fs, f0, Q));
             break;
 
@@ -520,6 +525,7 @@ void FlushAudioProcessor::publishUiSnapshot (double sampleRate)
     for (int i = 0; i < kMaxBands; ++i) {
         uiEnabled_[i] = bands_[i].enabled;
         uiCoefs_[i]   = bands_[i].coefs;
+        uiChannel_[i] = bands_[i].channel;
     }
 }
 
@@ -532,34 +538,54 @@ double FlushAudioProcessor::processBandChannel (std::vector<flush::MorphingBiqua
     return out;
 }
 
-// Total linear magnitude of the PARALLEL static EQ at frequency f (Hz):
-//   H_total(w) = 1 + Σ (H_i(w) - 1)  over the enabled, non-dynamic bands.
-// (A serial product would only be correct for a cascade; the audio path is
-// parallel, so the FIR must match the parallel response or the Linear-phase
-// mode sounds like a different EQ than what the curve shows.)
-double FlushAudioProcessor::staticEqMagnitudeLinear (double f) const
+// Complex responses of the static EQ's MID and SIDE paths at frequency f (Hz).
+//   H_mid(w) = 1 + Σ (H_i - 1)  over static bands placed stereo or mid
+//   H_side(w)= 1 + Σ (H_i - 1)  over static bands placed stereo or side
+void FlushAudioProcessor::staticPathResponses (double f, flush::Complex& mid, flush::Complex& side) const
 {
     const double w = 2.0 * kPi * f / procRate_;
-    double re = 1.0, im = 0.0;
+    double mre = 1.0, mim = 0.0, sre = 1.0, sim = 0.0;
     for (int i = 0; i < kMaxBands; ++i) {
         const auto& br = bands_[i];
         if (!br.enabled || br.dynamic) continue;   // static only
-        const flush::Complex h = flush::cascadeResponse (br.coefs, w);
-        re += h.re - 1.0;
-        im += h.im;
+
+        flush::Complex h = flush::cascadeResponse (br.coefs, w);
+
+        const double dRe = h.re - 1.0, dIm = h.im;
+        if (br.channel == 0) {                       // stereo -> both paths
+            mre += dRe; mim += dIm;
+            sre += dRe; sim += dIm;
+        } else if (br.channel == 1) {                // mid only
+            mre += dRe; mim += dIm;
+        } else if (br.channel == 2) {                // side only
+            sre += dRe; sim += dIm;
+        }
     }
-    return std::hypot (re, im);
+    mid = { mre, mim };
+    side = { sre, sim };
 }
 
-// Rebuild the combined linear-phase FIR from the static (non-dynamic) bands.
+// Rebuild the linear-phase FIRs: one for the MID path, one for the SIDE path
+// (so per-band Mid/Side placement is honoured in Linear mode, not collapsed
+// into a single stereo filter).
 void FlushAudioProcessor::rebuildLinearFir()
 {
     linearReady_ = false;
 
-    auto magFn = [&](double f) { return staticEqMagnitudeLinear (f); };
+    auto midMag = [&](double f) {
+        flush::Complex m, s;
+        staticPathResponses (f, m, s);
+        return std::hypot (m.re, m.im);
+    };
+    auto sideMag = [&](double f) {
+        flush::Complex m, s;
+        staticPathResponses (f, m, s);
+        return std::hypot (s.re, s.im);
+    };
 
-    linearCoeffs_ = flush::designLinearPhaseFir (magFn, procRate_, firLength_, 6.0);
+    linearCoeffs_ = flush::designLinearPhaseFir (midMag, procRate_, firLength_, 6.0);
     linearFirM_.set (linearCoeffs_);
+    linearCoeffs_ = flush::designLinearPhaseFir (sideMag, procRate_, firLength_, 6.0);
     linearFirS_.set (linearCoeffs_);
     linearFirDirty_.store (false);
     linearReady_ = true;
@@ -1123,6 +1149,14 @@ void FlushAudioProcessor::setBandType (int index, int shape)
     markBandsDirty();
 }
 
+void FlushAudioProcessor::setBandChannel (int index, int channel)
+{
+    if (index < 0 || index >= kMaxBands) return;
+    std::lock_guard<std::mutex> lock (bandMutex_);
+    bandTree.getChild (index).setProperty ("channel", juce::jlimit (0, 2, channel), nullptr);
+    markBandsDirty();
+}
+
 void FlushAudioProcessor::setBandDynamic (int index, bool on)
 {
     if (index < 0 || index >= kMaxBands) return;
@@ -1143,16 +1177,23 @@ double FlushAudioProcessor::eqResponseDb (double freqHz) const
 {
     std::lock_guard<std::mutex> lock (uiMutex_);
     const double w = 2.0 * kPi * freqHz / std::max (1.0, uiProcRate_);
-    // PARALLEL topology: total = 1 + Σ (H_i - 1). This is what the audio path
-    // actually does (and what Pro-Q displays) — not the serial product.
-    double re = 1.0, im = 0.0;
+    // PARALLEL topology with Mid/Side: L_out = A*L + B*R where
+    // A = (H_mid + H_side)/2. For an L-only (symmetric) signal the L channel
+    // experiences |A| — this is the physically correct composite curve (a +6 dB
+    // mid band reads +3.5 dB, because the unboosted side halves the contribution).
+    double mre = 1.0, mim = 0.0, sre = 1.0, sim = 0.0;
     for (int i = 0; i < kMaxBands; ++i) {
         if (!uiEnabled_[i]) continue;
-        const flush::Complex h = flush::cascadeResponse (uiCoefs_[i], w);
-        re += h.re - 1.0;
-        im += h.im;
+        flush::Complex h = flush::cascadeResponse (uiCoefs_[i], w);
+        const double dRe = h.re - 1.0, dIm = h.im;
+        const int ch = uiChannel_[i];
+        if (ch == 0) { mre += dRe; mim += dIm; sre += dRe; sim += dIm; }
+        else if (ch == 1) { mre += dRe; mim += dIm; }
+        else if (ch == 2) { sre += dRe; sim += dIm; }
     }
-    const double mag = std::hypot (re, im);
+    // A = (H_mid + H_side) / 2
+    const double are = 0.5 * (mre + sre), aim = 0.5 * (mim + sim);
+    const double mag = std::hypot (are, aim);
     return (mag > 1e-12) ? 20.0 * std::log10 (mag) : -120.0;
 }
 

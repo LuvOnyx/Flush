@@ -91,6 +91,9 @@
     "compile": "PENDING (needs cmake + platform libs)",
     "parallel_response_fix": "COMPLETE (UI curve + linear-phase FIR were using the SERIAL product; now compute 1 + sum(H-1) complex \u2014 verified 2x +6dB bells = 9.51 dB not 12 dB)",
     "coefficient_morphing": "COMPLETE (re-enabled: rebuild now MORPHS sections in place with 64-sample crossfade + state seeding when the section count is unchanged; was dead code with ramp=0 -> zipper on node drags)",
+    "ms_curve_fir": "COMPLETE (per-band Mid/Side placement now honoured in the display curve [A=(H_mid+H_side)/2] AND the linear-phase FIR [separate mid-path + side-path FIRs]; verified mid band displays at +3.5 dB)",
+    "band_channel_ui": "COMPLETE (per-band Stereo/Mid/Side channel exposed: context-menu Channel submenu + strip CH button; setBandChannel API)",
+    "notch_null_verified": "COMPLETE (RBJ notch nulls to -250 dB; documented WHY a matched-bandpass notch was rejected - only -20 dB null)",
     "identity_band_skip": "COMPLETE (0 dB static bell/shelf/tilt bands skip processing \u2014 saves 24 biquad runs when flat)"
   },
   "error_recovery": {

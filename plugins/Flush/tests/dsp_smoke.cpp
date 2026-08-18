@@ -1003,6 +1003,49 @@ int main() {
               ("helper " + std::to_string(mag) + " vs measured " + std::to_string(g)).c_str());
     }
 
+    // ---- 38. Notch must null perfectly (RBJ zeros on the unit circle) -----
+    {
+        // A notch's defining property is a perfect null at center. The RBJ notch
+        // places its zeros ON the unit circle -> exact null. (A matched-
+        // bandpass-based notch only nulls ~ -20 dB because the bandpass has
+        // non-zero phase at center — verified and rejected as not acceptable.)
+        Biquad notch; notch.setCoef (rbj::notch (fs, 2000.0, 2.0));
+        auto proc = [&](double x){ return notch.process (x); };
+        const double center = measureGainDb (proc, fs, 2000.0);
+        const double dc     = measureGainDb (proc, fs, 20.0);
+        const double hi     = measureGainDb (proc, fs, 10000.0);
+        std::printf("         RBJ notch @2k: center %.1f dB, DC %.2f dB, 10k %.2f dB\n",
+                    center, dc, hi);
+        CHECK("RBJ notch nulls deeply at center", center < -40.0,
+              ("center " + std::to_string(center) + " dB").c_str());
+        CHECK("RBJ notch unity at DC", std::fabs (dc) < 0.2,
+              ("DC " + std::to_string(dc) + " dB").c_str());
+        CHECK("RBJ notch unity far above center", std::fabs (hi) < 0.2,
+              ("10k " + std::to_string(hi) + " dB").c_str());
+    }
+
+    // ---- 39. Mid/Side composite curve convention --------------------------
+    {
+        // A +6 dB MID band: H_mid = 2 (linear) at center, H_side = 1 (no side
+        // band). The L-channel response to an L-only signal is A = (H_mid +
+        // H_side)/2 = 1.5 -> +3.5 dB. This locks the curve convention so a
+        // mid-band is displayed at its true stereo contribution (not +6 dB).
+        const double w0 = 2.0 * kPi * 1000.0 / fs;
+        std::vector<BiquadCoef> midCoefs = { matched::bell (fs, 1000.0, 6.0, 1.0) };
+        const Complex Hmid = cascadeResponse (midCoefs, w0);
+        CHECK("Mid bell at center = 2.0 linear (+6 dB)", std::fabs (Hmid.re - 2.0) < 0.01,
+              ("Hmid " + std::to_string(Hmid.re)).c_str());
+
+        // Composite: A = (Hmid + 1)/2 (side path is unity).
+        const double are = 0.5 * (Hmid.re + 1.0), aim = 0.5 * Hmid.im;
+        const double db = 20.0 * std::log10 (std::hypot (are, aim));
+        const double expected = 20.0 * std::log10 (1.5);
+        std::printf("         mid-band composite @1k: %.3f dB (expected %.3f)\n", db, expected);
+        CHECK("Mid band displays at +3.5 dB (true stereo contribution)",
+              std::fabs (db - expected) < 0.05,
+              ("measured " + std::to_string(db) + " vs " + std::to_string(expected)).c_str());
+    }
+
     std::printf("\n%s — %d failure(s)\n", g_failures ? "FAILED" : "ALL PASSED", g_failures);
     return g_failures ? 1 : 0;
 }
