@@ -25,7 +25,7 @@ gain-staging engine, built on **JUCE 9 + Visage (pure C++ UI)** — no web stack
   phase correlation, gain reduction, live "Flush: +x.x dB".
 
 The DSP core is **pure C++ (double precision), no JUCE dependency**, and is
-**74/74 verified** by a standalone test binary you can rebuild with plain `g++`.
+**103/103 verified** by a standalone test binary you can rebuild with plain `g++`.
 
 ---
 
@@ -33,11 +33,11 @@ The DSP core is **pure C++ (double precision), no JUCE dependency**, and is
 
 | Layer | Status | Confidence |
 |---|---|---|
-| DSP core (`Source/dsp/*.h`) | **Done + verified** | ✅ 74/74 assertions pass (g++) |
+| DSP core (`Source/dsp/*.h`) | **Done + verified** | ✅ 103/103 assertions pass (g++) |
 | JUCE processor (`PluginProcessor.*`) | **Written, not compiled** | ⚠️ follows repo conventions; needs first build |
 | Visage UI (`VisageControls.h`, `PluginEditor.*`) | **Written, not compiled** | ⚠️ needs first build + visual tuning |
 | CMakeLists.txt | **Written** | ⚠️ needs configure |
-| Presets (7 factory + A/B) | **Done** (in processor) | ✅ |
+| Presets (14 factory + user save/load + A/B) | **Done** (in processor) | ✅ |
 | Full plugin build / DAW load / listen pass | **NOT done** | ❌ your job |
 
 **The single most important fact:** everything below the JUCE boundary is proven;
@@ -138,8 +138,10 @@ These are the places a first build will most likely bite. Check them in order.
 
 8. **Mouse routing (IMPORTANT, already fixed).** The shared `common/VisageJuceHost.h`
    now hit-tests the deepest child frame (`frameAtPoint`) and converts native→logical
-   coordinates before dispatching. If you see knobs/nodes not responding, check this
-   bridge first — it was the #1 reason child-frame interaction was dead.
+   coordinates before dispatching, **and forwards `juce::mouseWheelMove`** (with a
+   positive = scroll-up normalization) to the Visage frame tree. If you see knobs/nodes
+   not responding to mouse or wheel, check this bridge first — it was the #1 reason
+   child-frame interaction (and all wheel editing) was dead.
 
 9. **Keyboard focus.** `EDITOR_WANTS_KEYBOARD_FOCUS` is `TRUE` so Delete/Backspace
    and arrow-nudge reach the EQ display. Some DAWs will still eat those keys —
@@ -165,12 +167,16 @@ This is the actual remaining work. Do it in this order:
    not pumpy; the Spectral compressor mode should tame a resonance without
    touching the rest of the signal.
 5. **UI** — verify knob drag / shift-fine / double-click-reset / hover glow /
-   mouse-wheel, VU↔bar meter switch, draggable EQ nodes with per-band colours +
-   hover glow, mouse-wheel Q editing, the selected-band strip (type cycle +
-   FREQ/GAIN/Q value scrubbing + DYN/SOLO), right-click context menus,
-   double-click add/reset band, keyboard delete + arrow nudge, preset toolbar +
-   A/B, settings modal (scale/refresh/accent), and that UI scale actually resizes
-   the window. Tune arc orientation, radii, and colours to taste.
+   mouse-wheel (scroll up = increase), VU↔bar meter switch, draggable EQ nodes with
+   per-band colours + hover glow, the **Pro-Q4 wheel modifier map** (wheel = Q,
+   wheel over a cut = stepped slope, Ctrl/Cmd = gain, Alt = dynamic range,
+   Alt+Ctrl/Cmd = linked gain↔range, Shift = fine), the **hover node tooltip**
+   (band # + type + Mid/Side + DYN tags + freq + gain/Q or slope), the selected-band
+   strip (type cycle + FREQ/GAIN/Q-or-SLOPE value scrubbing + DYN/SOLO/CH),
+   right-click context menus, double-click add (selects) / reset band, keyboard
+   delete + arrow nudge, preset toolbar + A/B, settings modal (scale/refresh/accent),
+   and that UI scale actually resizes the window. Tune arc orientation, radii, and
+   colours to taste.
 
 ---
 
@@ -194,20 +200,30 @@ This is the actual remaining work. Do it in this order:
 ## 8. Known remaining TODOs (in rough priority order)
 
 - [ ] **First compile + fix-ups** (§5) — unblocks everything.
-- [ ] **User preset save/load** — format already defined (full state XML, see
-      `getStateInformation`); only the UI "save" button + a file browser are missing.
+- [ ] **User preset *naming* UI** — save/load/delete are implemented (full state XML,
+      see `getStateInformation`); the toolbar SAVE button currently writes "User N"
+      because the Visage frame tree has no text-entry widget yet. Add one (or a
+      JUCE-side filename dialog) for real names.
 - [ ] **UI visual fine-tuning** — arc orientation, exact radii/colors; the analyzer
       uses a 3-band alpha falloff per column (could go to a true per-column
       `Brush::vertical` gradient for an even smoother look); context-menu styling
-      against the host's appearance.
-- [ ] **4× oversampling** is implemented but unverified end-to-end in the plugin
-      (the DSP test covers it standalone).
+      against the host's appearance; the hover tooltip can momentarily overlap the
+      analyzer toolbar for nodes in the extreme top-right corner (smart-anchor pass).
 - [ ] **Spectral dynamics** could get a lookahead + stereo-link option.
 - [ ] **Gated integrated LUFS** (BS.1770 gating) for Flush Match — currently
       K-weighted *short-term* loudness, which is correct for a live plugin but
       not the gated/integrated variant.
 - [ ] **Gain-Q interaction curve** — currently a linear model; could match the
       Pro-Q curve more closely.
+- [ ] **Orfanidis narrow-Q near-Nyquist robustness** — extreme Q very close to
+      Nyquist can push the prescribed Nyquist gain off the real axis; the design
+      degrades gracefully to the DC reference gain but doesn't match the prototype
+      there. Documented frontier (see `orfanidis::peq`).
+- [ ] **Per-band L/R placement** (channel 3) — Mid/Side is done; true per-channel
+      Left/Right needs a 2×2 MIMO treatment for the linear-phase FIR + curve.
+- [ ] **Dynamic-band envelope state migration** — a coefficient rebuild briefly
+      re-triggers the band's detector/ballistics (state doesn't migrate across
+      `reset()`). Minor; audible only as a short re-attack on edit.
 - [ ] **Presets**: more factory content, especially for rap/RnB/drill.
 
 ---
@@ -233,7 +249,7 @@ plugins/Flush/
 │       ├── FlushDynamics.h       · FlushSpectral.h · FlushMatch.h
 │       ├── FlushLoudness.h       · FlushFft.h      · FlushFir.h
 │       ├── FlushOversample.h     · FlushAnalyzer.h
-└── tests/dsp_smoke.cpp         ← 74 assertions, standalone (g++ only)
+└── tests/dsp_smoke.cpp         ← 103 assertions, standalone (g++ only)
 ```
 
 **Good luck — and measure before you "improve."**

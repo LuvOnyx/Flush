@@ -444,12 +444,16 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
             break;
 
         case flush::Shape::TiltShelf:
-            // v1 approximation: a tilt implemented as a steep shelf (refine in later pass).
-            pushSection (flush::shelfMatch::highShelf (fs, f0, gain));
+            // First-order tilt: unity at f0, +gain at DC, -gain at Nyquist
+            // (the classic mastering tilt shelf that pivots around f0).
+            pushSection (flush::firstOrderTilt (fs, f0, gain));
             break;
 
         case flush::Shape::FlatTilt:
-            pushSection (flush::firstOrderTilt (fs, f0, gain));
+            // Steeper, more linear-in-dB tilt: two cascaded first-order tilts
+            // (each half-gain) hold the slope over a wider band.
+            for (const auto& c : flush::flatTilt (fs, f0, gain))
+                pushSection (c);
             break;
     }
 
@@ -1335,12 +1339,14 @@ void FlushAudioProcessor::loadFactoryPreset (int index)
 
     std::lock_guard<std::mutex> lock (bandMutex_);
 
-    // Clear all bands.
+    // Clear all bands. `channel` is reset too — a band previously placed Mid/Side
+    // must not leak that placement into a fresh preset's stereo bands.
     for (int i = 0; i < kMaxBands; ++i) {
         auto b = bandTree.getChild (i);
         b.setProperty ("enabled", false, nullptr);
         b.setProperty ("dynamic", false, nullptr);
         b.setProperty ("solo", false, nullptr);
+        b.setProperty ("channel", 0, nullptr);
     }
 
     // Apply the preset's bands to the first slots.

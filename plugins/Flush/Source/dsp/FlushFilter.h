@@ -614,18 +614,20 @@ inline BiquadCoef bell (double fs, double f0, double gainDb, double Q)
 
 // ------------------------------------------------------------ first-order tilt --
 
-// First-order shelf with DC gain g0 and Nyquist gain g1 (BLT, prewarped at f0).
-// Used for "Flat Tilt": g0 = G, g1 = 1/G — a constant tilt across the spectrum.
+// Classic first-order tilt EQ: H(s) = (s + G*Ω) / (G*s + Ω), Ω prewarped at f0.
+//   |H(DC)| = G, |H(Nyquist)| = 1/G, |H(f0)| = 1  (the pivot)
+// so the spectrum tilts around f0 — boosting one side of the pivot and cutting
+// the other by the same amount. (The previous "generic shelf with g0=G, g1=1/G"
+// was NOT a tilt: its unity-crossing frequency is not f0.)
 inline BiquadCoef firstOrderTilt(double fs, double f0, double gainDb) {
-    const double G = dbToLin(gainDb);                 // DC gain
-    const double w = std::tan(kPi * clampFc (f0, fs) / fs);   // tan(w0/2), clamped
-    const double g0 = G, g1 = 1.0 / std::max (G, 1e-12);
-    const double den = w + 1.0;
+    const double G = dbToLin(gainDb);
+    const double c = std::tan(kPi * clampFc (f0, fs) / fs);   // Ω = tan(w0/2), prewarped
+    const double den = G + c;
     BiquadCoef r;
-    r.b0 = (g0 * w + g1) / den;
-    r.b1 = (g0 * w - g1) / den;
+    r.b0 = (1.0 + G * c) / den;
+    r.b1 = (G * c - 1.0) / den;
     r.b2 = 0.0;
-    r.a1 = (w - 1.0) / den;
+    r.a1 = (c - G) / den;
     r.a2 = 0.0;
     return r;
 }
@@ -653,6 +655,18 @@ inline BiquadCoef firstOrderHighpass(double fs, double f0) {
     r.a1 = (k - 1.0) / den;
     r.a2 = 0.0;
     return r;
+}
+
+// "Flat Tilt": a tilt that is *steeper* and closer to a constant dB/octave slope
+// than the first-order tilt shelf — two cascaded first-order tilts, each carrying
+// half the gain. The total tilt amount is still gainDb (unity at f0, +G at DC,
+// -G at Nyquist) but the transition is 2nd-order, so the slope is held over a
+// wider band (a documented v1 approximation of the reference "flat" tilt; a true
+// constant-dB/oct tilt needs a fractional-order design).
+inline std::vector<BiquadCoef> flatTilt (double fs, double f0, double gainDb)
+{
+    const double half = gainDb * 0.5;
+    return { firstOrderTilt (fs, f0, half), firstOrderTilt (fs, f0, half) };
 }
 
 // Analog-style gain-Q interaction (Pro-Q "Gain-Q Link"): Q and gain influence

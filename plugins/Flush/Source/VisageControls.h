@@ -205,8 +205,10 @@ public:
     {
         if (!param_) return false;
         const double sens = e.isShiftDown() ? 0.002 : 0.006;
+        // Scroll up (positive wheel_delta_y) increases, matching the drag
+        // direction (drag up = increase) and the EQ node wheel (up = wider Q).
         param_->setValueNotifyingHost ((float)juce::jlimit (0.0, 1.0,
-            param_->getValue() - e.wheel_delta_y * sens));
+            param_->getValue() + e.wheel_delta_y * sens));
         redraw();
         return true;
     }
@@ -682,6 +684,7 @@ public:
         const double f = b.getProperty ("freq", 1000.0);
         const double g = b.getProperty ("gain", 0.0);
         const double q = b.getProperty ("q", 1.0);
+        const double slope = b.getProperty ("slope", 12.0);
         const bool dyn = (bool)b.getProperty ("dynamic", false);
         const bool solo = (bool)b.getProperty ("solo", false);
         const int  ch  = juce::jlimit (0, 2, (int)b.getProperty ("channel", 0));
@@ -693,9 +696,13 @@ public:
         canvas.text (shapeName (shape), smallFont_, visage::Font::kCenter,
                      s.typeX, s.y + 6.0f, s.typeW, s.h - 12.0f);
 
+        // Cuts are controlled by slope, not Q — show the right parameter.
+        const bool isCut = shapeIsCut (shape);
         drawScrub (canvas, 1, s.freqX, s.y, s.valW, "FREQ", freqText (f));
-        drawScrub (canvas, 2, s.gainX, s.y, s.valW, "GAIN", gainText (g));
-        drawScrub (canvas, 3, s.qX,    s.y, s.valW, "Q",    qText (q));
+        drawScrub (canvas, 2, s.gainX, s.y, s.valW, "GAIN",
+                   shapeHasGain (shape) ? gainText (g) : juce::String ("-"));
+        drawScrub (canvas, 3, s.qX, s.y, s.valW,
+                   isCut ? "SLOPE" : "Q", isCut ? slopeText (slope) : qText (q));
 
         // Dynamic / Solo toggles (anchored right-of-centre).
         canvas.setColor (dyn ? C::yellow : C::label);
@@ -915,7 +922,10 @@ public:
                 auto b = processor_.getBand (hit);
                 processor_.moveBand (hit, b.getProperty ("freq", 1000.0), 0.0);
             } else {
-                processor_.addBand (freqAtX (e.position.x), 0.0, (int)flush::Shape::Bell);
+                // Double-click empty space: add AND select the new band (Pro-Q
+                // behaviour — the new band's controls appear immediately).
+                const int slot = processor_.addBand (freqAtX (e.position.x), 0.0, (int)flush::Shape::Bell);
+                if (slot >= 0) selected_ = slot;
             }
             redraw();
             return;
@@ -1129,14 +1139,22 @@ private:
             double f = b.getProperty ("freq", 1000.0);
             f = std::max (20.0, std::min (20000.0, f * std::pow (10.0, -dy * 0.004)));
             processor_.setBandFreq (selected_, f);
-        } else if (scrubbing_ == 1) { // gain
-            double g = b.getProperty ("gain", 0.0);
-            g = std::max (-30.0, std::min (30.0, g - dy * 0.15));
-            processor_.setBandGain (selected_, g);
-        } else {                      // Q
-            double q = b.getProperty ("q", 1.0);
-            q = std::max (0.05, std::min (40.0, q * std::pow (1.03, -dy)));
-            processor_.setBandQ (selected_, q);
+        } else if (scrubbing_ == 1) { // gain (no-op for gain-less shapes)
+            if (shapeHasGain ((int)b.getProperty ("shape", (int)flush::Shape::Bell))) {
+                double g = b.getProperty ("gain", 0.0);
+                g = std::max (-30.0, std::min (30.0, g - dy * 0.15));
+                processor_.setBandGain (selected_, g);
+            }
+        } else {                      // Q (or slope for cuts)
+            if (shapeIsCut ((int)b.getProperty ("shape", (int)flush::Shape::Bell))) {
+                const double slope = b.getProperty ("slope", 12.0);
+                processor_.setBandSlope (selected_,
+                    juce::jlimit (12.0, 48.0, slope + (dy < 0.0f ? 12.0 : -12.0)));
+            } else {
+                double q = b.getProperty ("q", 1.0);
+                q = std::max (0.05, std::min (40.0, q * std::pow (1.03, -dy)));
+                processor_.setBandQ (selected_, q);
+            }
         }
         updateBubble (selected_);
         redraw();
@@ -1149,7 +1167,10 @@ private:
         const double f = b.getProperty ("freq", 1000.0);
         const double g = b.getProperty ("gain", 0.0);
         const double q = b.getProperty ("q", 1.0);
-        bubbleText_ = freqText (f) + "  " + gainText (g) + "  Q " + juce::String (q, 2);
+        if (shapeIsCut ((int)b.getProperty ("shape", (int)flush::Shape::Bell)))
+            bubbleText_ = freqText (f) + "  " + slopeText (b.getProperty ("slope", 12.0));
+        else
+            bubbleText_ = freqText (f) + "  " + gainText (g) + "  Q " + qText (q);
     }
 
     // ------------------------------------------------------------ context menu --

@@ -60,7 +60,7 @@ uses the matched family instead:
   (linear phase), center gain matches the matched IIR to ~0.1 dB, DC exact.
 - **2x oversampling** — half-band up/down, round-trip flat to 0.003 dB, image rejection −72 dB.
 - **RBJ demoted to a measurement baseline** — never a user-facing mode.
-- **Next DSP passes:** 4x oversampling, spectral dynamics (Pro-Q4's newest feature).
+- **4x oversampling** and **spectral dynamics** (Pro-Q4's newest feature) — both done + verified.
 - Gain–Q interaction, sample-accurate smoothing, denormal protection.
 
 ## Repo layout
@@ -91,15 +91,17 @@ cd plugins/Flush/tests
 g++ -std=c++20 -O2 -I../Source/dsp dsp_smoke.cpp -o dsp_smoke && ./dsp_smoke
 ```
 
-91 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
+103 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
 LP/HP −3.01 dB @ fc, a three-way no-cramp comparison (RBJ 47% vs Vicanek 7% vs Orfanidis
 2.1%), decramped shelves vs the analog prototype, TPT/ZDF SVF, coefficient morphing,
-Oxford-style adaptive release, Flush Match (K-weighted) neutralizing a +6 dB change and
-hitting a −18 dB target, K-weighting matching the published BS.1770-4 coefficients to
-0.000000 dB, true-peak detecting intersample peaks, FFT correctness, linear-phase FIR
-(magnitude match + exact symmetry), 2x + 4x oversampler round-trip flatness + −72 dB image
-rejection, the spectrum analyzer's peak + tilt, spectral dynamics (above-threshold reduced,
-below-threshold untouched, clean pass-through), and gain-Q interaction.
+Oxford-style adaptive release, Flush Match (K-weighted) neutralizing a +6 dB change,
+hitting a −18 dB target, and returning to unity when switched Off, K-weighting matching
+the published BS.1770-4 coefficients to 0.000000 dB, true-peak detecting intersample
+peaks, FFT correctness, linear-phase FIR (magnitude match + exact symmetry), 2x + 4x
+oversampler round-trip flatness + −72 dB image rejection, the spectrum analyzer's peak +
+tilt + DC-bin level, spectral dynamics (above-threshold reduced, below-threshold and DC
+untouched, clean pass-through), gain-Q interaction, the tilt shapes (Tilt Shelf + Flat
+Tilt pivot at f0 with ±G at the extremes), and the dynamics rangeDb GR ceiling.
 
 ## Build the plugin
 
@@ -117,23 +119,31 @@ or use `scripts/build-and-install.sh -PluginName Flush` (honors `apc.config.json
 
 - [x] Concept + architecture (dream/plan) — `status.json`
 - [x] Design v2 (Pro-Q4 recreation spec) — `Design/v2-ui-spec.md`
-- [x] DSP core — written + **verified** (81/81 tests): filters (all decramped), dynamics, loudness,
-      FFT, linear-phase FIR, 2x/4x oversampling, analyzer (freeze + source), spectral dynamics,
-      gain-Q, oversampler impulse-delay (half-sample phase fixed), compressor lookahead
-      (correct direction + 1-sample delay-line fix)
+- [x] DSP core — written + **verified** (103/103 tests): filters (all decramped, incl. proper
+      Tilt Shelf + Flat Tilt), dynamics (incl. rangeDb GR ceiling), loudness, FFT, linear-phase
+      FIR, 2x/4x oversampling, analyzer (freeze + source + DC-bin level), spectral dynamics
+      (incl. DC/Nyquist-bin normalization), gain-Q, oversampler impulse-delay (half-sample
+      phase fixed), compressor lookahead (correct direction + 1-sample delay-line fix),
+      Flush Match Off→unity ramp
 - [x] JUCE processor — APVTS + 24-band state + full chain (linear FIR w/ quality tiers,
       2x/4x oversampling, M/S + spectral modes, analyzer, metering, latency) + 14 factory presets +
       user preset save/load + A/B + band solo
 - [x] Visage UI (FabFilter-grade: vertical gradients, per-band colour nodes + hover glow,
       value bubbles, selected-band strip, preset bar, settings modal, GR meter) — written
-- [x] UI interactions — right-click context menus, double-click add/reset, drag nodes,
-      mouse-wheel Q editing, value scrubbing (freq/gain/Q), keyboard delete + arrow nudge,
-      dynamic accent theming, UI scaling (window resize) + 120 Hz render loop,
-      mouse hit-testing to child frames fixed in the shared bridge
+- [x] UI interactions — right-click context menus, double-click add (and select) / reset,
+      drag nodes, Pro-Q4 wheel modifier map (Q / slope / Ctrl-Cmd gain / Alt dyn-range /
+      Alt+Ctrl linked / Shift fine), Pro-Q4-style node tooltips (band #, type, Mid/Side +
+      DYN tags, freq, gain+Q or slope), value scrubbing (freq/gain/Q or slope for cuts),
+      keyboard delete + arrow nudge, dynamic accent theming, UI scaling (window resize) +
+      120 Hz render loop, mouse hit-testing to child frames fixed in the shared bridge,
+      wheel events forwarded across the JUCE/Visage boundary (previously dropped)
 - [x] Hardening & polish — cut-type swap fixed (LowCut=HP/HighCut=LP), SVF cuts, const-correctness,
       per-band dynamics sample-rate fix, spectral GR metering, thread-safe UI curve snapshot,
       atomic dirty flags, latency-report ordering, bandTree mutex + locked editing API,
-      oversampler half-sample phase fix, knob track arc, drawn gear, toggles
+      oversampler half-sample phase fix, knob track arc, drawn gear, toggles,
+      Tilt Shelf no longer a plain high shelf (now a true first-order tilt), Flat Tilt
+      (2-section), Flush Match Off→unity ramp, preset `channel` reset, spectral/analyzer
+      DC+Nyquist bin normalization (+6 dB fix), knob wheel direction (up = increase)
 - [x] Bulletproofing — NaN/Inf sanitization on every sample path, Q/freq/param clamps,
       FFT non-power-of-2 & null-pointer guards, channel edge cases (mono/0-in/0-out),
       null-safe parameter reads + ID validation, band-count normalization, try/catch state

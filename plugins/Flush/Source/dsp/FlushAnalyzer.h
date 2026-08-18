@@ -127,8 +127,10 @@ private:
         fft (work_.data(), fftSize_, false);
 
         // Hann coherent gain: a full-scale sine reads 0 dB after this scale.
-        const double scale = 4.0 / fftSize_;
+        // DC and Nyquist bins carry the window's full energy in a single bin
+        // (|X| = A*N/2), so they need 2/N — otherwise they read +6 dB hot.
         for (int k = 0; k < half_; ++k) {
+            const double scale = (k == 0 || k == half_ - 1) ? 2.0 / fftSize_ : 4.0 / fftSize_;
             const double re = work_[k].re * scale;
             const double im = work_[k].im * scale;
             const double p = re * re + im * im;

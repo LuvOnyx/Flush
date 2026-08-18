@@ -64,8 +64,14 @@ public:
     // Advance the auto-gain one step; returns the linear gain to apply to the
     // output sample that was just pushed via pushOutput().
     double tickGain() {
-        if (mode_ == Mode::Off)
-            return dbToLin(gainDb_.value());   // frozen at last value
+        if (mode_ == Mode::Off) {
+            // Off = no Flush Match gain. Ease the (possibly frozen) gain back to
+            // unity over the gain smoothing time — click-free, and the stage is
+            // truly bypassed once settled (a previous build froze it at the last
+            // matched value, leaving a permanent, invisible level offset).
+            gainDb_.update (0.0);
+            return dbToLin (gainDb_.value());
+        }
 
         const double inDb  = linToDb(std::sqrt(std::max(0.0, inLoud_.value())));
         const double outDb = linToDb(std::sqrt(std::max(0.0, outLoud_.value())));

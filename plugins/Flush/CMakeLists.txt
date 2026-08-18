@@ -57,6 +57,12 @@ target_sources(flush
         Source/dsp/FlushFilter.h
         Source/dsp/FlushDynamics.h
         Source/dsp/FlushMatch.h
+        Source/dsp/FlushLoudness.h
+        Source/dsp/FlushFft.h
+        Source/dsp/FlushFir.h
+        Source/dsp/FlushOversample.h
+        Source/dsp/FlushAnalyzer.h
+        Source/dsp/FlushSpectral.h
 )
 
 # ============================================

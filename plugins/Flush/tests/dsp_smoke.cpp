@@ -275,6 +275,41 @@ int main() {
               std::fabs(outDb - (-18.0)) < 0.4, ("out " + std::to_string(outDb) + " dB").c_str());
     }
 
+    // ---- 8b. Flush Match: Off returns to unity (not frozen) ----------------
+    // A previous build froze the auto-gain at its last value when switched Off,
+    // leaving an invisible permanent level offset. Off must ease back to 0 dB.
+    {
+        FlushMatch fm;
+        fm.reset(fs);
+        fm.setMode(FlushMatch::Mode::MatchInput);
+        fm.setTiming(1);                                  // Medium
+        const double w = 2.0 * kPi * 440.0 / fs;
+        const int n = (int)(fs * 4.0);
+        double convergedDb = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const double in  = std::sin (w * i);
+            const double pre = in * 2.0;                  // +6.02 dB boost
+            fm.pushInput (in, in);
+            fm.pushOutput (pre, pre);
+            fm.tickGain();
+        }
+        convergedDb = fm.deltaDb();
+        CHECK("Flush Match: converged to ~ -6 dB before Off",
+              std::fabs (convergedDb - (-6.02)) < 0.2,
+              ("delta " + std::to_string(convergedDb) + " dB").c_str());
+
+        fm.setMode (FlushMatch::Mode::Off);
+        for (int i = 0; i < n; ++i) {                     // let it settle toward unity
+            fm.pushInput (0.5, 0.5);
+            fm.pushOutput (0.5, 0.5);
+            fm.tickGain();
+        }
+        const double settledDb = fm.deltaDb();
+        CHECK("Flush Match: Off ramps gain back to unity (0 dB)",
+              std::fabs (settledDb) < 0.05,
+              ("delta " + std::to_string(settledDb) + " dB").c_str());
+    }
+
     // ---- 9. K-weighting matches the published BS.1770-4 coefficients ------
     {
         Biquad canonShelf; canonShelf.setCoef(KWeighting::shelf48k());
@@ -600,6 +635,21 @@ int main() {
               ("peak " + std::to_string(mags[peakBin]) + " dB @ " + std::to_string((int)fBin) + " Hz").c_str());
     }
 
+    // ---- 19b. Analyzer: DC bin reads its true level (not +6 dB) ------------
+    {
+        Analyzer an; an.reset (fs);
+        an.setSpeed (2);
+        an.setTilt (0.0);                                // tilt off for the DC test
+
+        std::vector<double> mono ((size_t)(fs * 1.0), 0.5);   // DC = -6.02 dBFS
+        an.process (mono.data(), (int)mono.size());
+        const auto& mags = an.magnitudes();
+        // First output column covers FFT bins 0..~4; bin 0 dominates -> -6.02 dB.
+        std::printf("         analyzer DC: %.2f dB (expect -6.02)\n", mags[0]);
+        CHECK("Analyzer DC reads ~ -6 dB (not +6 dB hot)",
+              std::fabs (mags[0] - (-6.02)) < 0.5, (std::to_string(mags[0]) + " dB").c_str());
+    }
+
     // ---- 20. Spectral dynamics: per-frequency gain reduction ---------------
     {
         SpectralDynamics sd; sd.reset (fs, 2048);
@@ -647,6 +697,29 @@ int main() {
         std::printf("         spectral: -26 dBFS in -> %.2f dBFS (below threshold)\n", outDb);
         CHECK("Spectral dynamics leaves below-threshold signal unchanged",
               std::fabs (outDb - (-26.02)) < 1.0, ("out " + std::to_string(outDb) + " dB").c_str());
+    }
+
+    // ---- 21b. Spectral dynamics: DC bin is NOT read +6 dB hot --------------
+    // The Hann window's full DC energy lands in bin 0 (|X| = A*N/2), so a
+    // uniform 4/N normalization reads DC 2x loud. Amplitude 0.5 (-6.02 dBFS)
+    // with a -3 dB threshold must pass untouched; the bug attenuated it ~3 dB.
+    {
+        SpectralDynamics sd; sd.reset (fs, 2048);
+        SpectralParams p; p.thresholdDb = -3.0; p.ratio = 100.0;
+        p.rangeDb = 60.0; p.attackSec = 0.005; p.releaseSec = 0.1; p.kneeDb = 0.0;
+        sd.setParams (p);
+
+        const int n = (int)(fs * 1.0);
+        const int measureFrom = (int)(fs * 0.5);
+        std::vector<double> buf (n);
+        for (int i = 0; i < n; ++i) buf[i] = 0.5;         // DC = -6.02 dBFS
+        sd.process (buf.data(), n);
+        double acc = 0.0;
+        for (int i = measureFrom; i < n; ++i) acc += buf[i] * buf[i] / (n - measureFrom);
+        const double outDb = 20.0 * std::log10 (std::sqrt (acc) / 0.5);
+        std::printf("         spectral DC: -6.02 dBFS in -> %.2f dB re input (threshold -3)\n", outDb);
+        CHECK("Spectral dynamics leaves below-threshold DC unchanged",
+              std::fabs (outDb) < 0.3, ("out " + std::to_string(outDb) + " dB").c_str());
     }
 
     // ---- 22. Spectral dynamics: pass-through at threshold 0 ---------------
@@ -701,6 +774,37 @@ int main() {
         CHECK("Gain-Q: symmetric in boost/cut",
               std::fabs (gainQLinkedQ (1.5, 12.0) - gainQLinkedQ (1.5, -12.0)) < 1e-12,
               "boost == cut");
+    }
+
+    // ---- 24c. Tilt shapes: Tilt Shelf + Flat Tilt pivot at f0 --------------
+    // A tilt must be unity at the pivot and +G / -G at the two extremes (NOT a
+    // plain shelf — a previous build wired TiltShelf to a high shelf).
+    {
+        const double G = dbToLin (6.0);                       // +6 dB -> 1.9953
+        const double w0 = 2.0 * kPi * 1000.0 / fs;
+
+        const BiquadCoef t = firstOrderTilt (fs, 1000.0, 6.0);
+        const double tDc = magnitude (t, 0.0);
+        const double tNy = magnitude (t, kPi);
+        const double tPv = magnitude (t, w0);
+        CHECK("Tilt shelf DC gain = +G", std::fabs (tDc - G) < 1e-6,
+              (std::to_string(tDc)).c_str());
+        CHECK("Tilt shelf Nyquist gain = 1/G", std::fabs (tNy - 1.0 / G) < 1e-6,
+              (std::to_string(tNy)).c_str());
+        CHECK("Tilt shelf unity at pivot f0", std::fabs (tPv - 1.0) < 0.15,
+              (std::to_string(tPv)).c_str());
+
+        const auto ft = flatTilt (fs, 1000.0, 6.0);
+        CHECK("Flat tilt = 2 cascaded sections", ft.size() == 2, "2 sections");
+        const double fDc = magnitude (ft[0], 0.0) * magnitude (ft[1], 0.0);
+        const double fNy = magnitude (ft[0], kPi)  * magnitude (ft[1], kPi);
+        const double fPv = magnitude (ft[0], w0)   * magnitude (ft[1], w0);
+        CHECK("Flat tilt DC gain = +G", std::fabs (fDc - G) < 1e-6,
+              (std::to_string(fDc)).c_str());
+        CHECK("Flat tilt Nyquist gain = 1/G", std::fabs (fNy - 1.0 / G) < 1e-6,
+              (std::to_string(fNy)).c_str());
+        CHECK("Flat tilt unity at pivot f0", std::fabs (fPv - 1.0) < 0.15,
+              (std::to_string(fPv)).c_str());
     }
 
     // ---- 24b. Oversampler latency is integer and matches the reported value ---

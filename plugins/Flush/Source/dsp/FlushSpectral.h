@@ -121,8 +121,12 @@ private:
         peakGr_ = 0.0;
         for (int k = 0; k <= N_ / 2; ++k) {
             // Hann coherent gain 0.5 -> a full-scale sine (amplitude 1.0) reads
-            // 0 dBFS: |bin| = A*N/4, so 4/N * |bin| = A.
-            const double mag = 4.0 * std::hypot (fft_[k].re, fft_[k].im) / N_;
+            // 0 dBFS: |bin| = A*N/4, so 4/N * |bin| = A. The DC and Nyquist bins
+            // are the exception: the window's full DC energy lands in a single
+            // bin (|X| = A*N/2), so they need 2/N — a uniform 4/N would read
+            // them 2x loud (+6 dB) and over-compress DC / Nyquist content.
+            const double norm = (k == 0 || k == N_ / 2) ? 2.0 / N_ : 4.0 / N_;
+            const double mag = norm * std::hypot (fft_[k].re, fft_[k].im);
             const double db = linToDb (mag);
 
             const double over = db - p_.thresholdDb;

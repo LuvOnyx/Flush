@@ -5,7 +5,7 @@
   "ui_framework": "visage",
   "complexity_score": 4,
   "created_at": "2026-08-15T20:55:09Z",
-  "last_modified": "2026-08-18T00:55:43Z",
+  "last_modified": "2026-08-18T01:32:58Z",
   "phase_history": [
     {
       "phase": "ideation_complete",
@@ -38,6 +38,12 @@
       "completed_at": "2026-08-18T00:55:43Z",
       "framework_selected": "visage",
       "notes": "UI interaction pass matching FabFilter Pro-Q 4. (1) Added Pro-Q4-style node tooltips: a floating card on hover showing band number + type (with Mid/Side and DYN tags), frequency, and gain + Q (or slope for cuts), anchored to the node and clamped in-plot. (2) Replaced the single-purpose wheel handler with the full Pro-Q4 modifier map: plain wheel = Q, wheel over a cut = stepped slope (12/24/36/48 dB/oct), Ctrl/Cmd = gain, Alt = dynamic range, Alt+Ctrl/Cmd = linked gain<->dynamic-range trade, Shift = fine steps. (3) Found and fixed a REAL routing bug: VisageJuceHost never forwarded juce mouseWheelMove, so the EQ display wheel handler (and wheel-Q editing) was unreachable dead code; added deepest-frame hit-test + parent-chain walk mirroring visage_app/window_event_handler.cpp. (4) Added processor setters setBandSlope / setBandDynRange / setBandGainDynRange (all bandMutex_-locked, clamped). (5) New DSP assertion: Dynamics rangeDb caps GR at 6 dB under a 40 dB overshoot (measured 6.000000 dB). DSP smoke now 92/92. Wheel sign normalized to positive=scroll-up across the JUCE/Visage boundary. Not compile-verified here (no cmake/ALSA/WebKitGTK); first build on local machine per HANDOFF.md."
+    },
+    {
+      "phase": "hard_audit_and_polish_pass",
+      "completed_at": "2026-08-18T01:32:58Z",
+      "framework_selected": "visage",
+      "notes": "HARD AUDIT + UI POLISH PASS. Found and fixed 6 real bugs + 1 build-robustness gap: (1) TiltShelf was wired to a plain high shelf (not a tilt at all) — replaced with a true first-order tilt (unity at f0, +G at DC, -G at Nyquist) and gave FlatTilt a distinct 2-section form; both verified |H(f0)|=1.000000. (2) Flush Match Off froze the last auto-gain (permanent invisible level offset) — now ramps to unity; verified -6 dB -> -0.02 dB. (3) Spectral dynamics AND the analyzer read the DC/Nyquist bins +6 dB hot (Hann coherent gain is 1.0 at the edge bins, not 0.5) — fixed with 2/N at k=0/k=N/2; spectral DC below threshold now passes untouched; analyzer DC reads -6.02 dB. (4) loadFactoryPreset leaked a band's prior Mid/Side channel into fresh presets — reset. (5) Knob mouse-wheel direction was inverted vs. the drag direction — fixed (up=increase). (6) Strip showed a meaningless Q for cut bands — now shows/scrubs SLOPE. (7) CMakeLists target_sources listed only 4 of 10 DSP headers — added the rest. UI polish: double-click-add now selects the new band (Pro-Q behaviour). DSP smoke went 92 -> 103/103. Not compile-verified here (no cmake/ALSA/WebKitGTK); first build on the local machine per HANDOFF.md."
     }
   ],
   "validation": {
@@ -56,7 +62,7 @@
     "implementation_strategy": "phased"
   },
   "implementation_progress": {
-    "dsp_core": "COMPLETE (92/92 tests passing)",
+    "dsp_core": "COMPLETE (103/103 tests passing)",
     "filter_family": "RBJ demoted to baseline; Vicanek matched + Orfanidis decramped + Vicanek matched shelves in use",
     "cut_slopes": "COMPLETE (12-48 dB/oct, cascaded matched sections)",
     "dynamic_per_node": "COMPLETE (every node supports dynamic + Oxford-style adaptive release)",
@@ -104,7 +110,14 @@
     "node_tooltips": "COMPLETE (Pro-Q4-style hover tooltip card: band # + type, Mid/Side + DYN tags, frequency, gain + Q or slope for cuts; flips L/R and clamps inside the plot)",
     "wheel_modifier_map": "COMPLETE (Pro-Q4 wheel map over a node: plain=Q, over a cut=slope 12/24/36/48, Ctrl/Cmd=gain, Alt=dyn range, Alt+Ctrl/Cmd=linked gain<->dyn-range trade, Shift=fine steps)",
     "wheel_bridge_fix": "COMPLETE (JUCE mouseWheelMove now forwarded to Visage with deepest-frame hit-test + parent walk; previously wheel events were DROPPED entirely, so wheel-Q was dead code)",
-    "dyn_range_cap_test": "COMPLETE (new assertion: Dynamics rangeDb hard-caps GR at 6 dB under a 40 dB overshoot — measured 6.000000 dB)"
+    "dyn_range_cap_test": "COMPLETE (new assertion: Dynamics rangeDb hard-caps GR at 6 dB under a 40 dB overshoot — measured 6.000000 dB)",
+    "tilt_shapes_fixed": "COMPLETE (Tilt Shelf was wired to a plain high shelf — NOT a tilt. Now a true first-order tilt: unity at f0, +G at DC, -G at Nyquist. Flat Tilt = 2 cascaded half-gain first-order tilts. Both verified: |H(f0)| = 1.000000, DC = +G, Nyquist = 1/G)",
+    "flushmatch_off_fix": "COMPLETE (Flush Match \"Off\" used to FREEZE the last auto-gain — a permanent invisible level offset. Now eases back to unity; verified -6 dB converged -> -0.02 dB after Off)",
+    "spectral_dc_fix": "COMPLETE (spectral dynamics + analyzer read the DC/Nyquist bins +6 dB hot — Hann coherent gain is 1.0 at those two edge bins, not 0.5. Fixed with 2/N normalization at k=0 and k=N/2; verified DC passes untouched below threshold)",
+    "preset_channel_reset": "COMPLETE (loading a factory preset no longer leaks a band's previous Mid/Side placement into the fresh preset — channel is reset to stereo)",
+    "knob_wheel_direction": "COMPLETE (knob mouse-wheel now scroll-up = increase, matching the drag direction and the EQ-node wheel)",
+    "strip_slope_edit": "COMPLETE (selected-band strip shows/scrubs SLOPE for cut bands instead of a meaningless Q; drag bubble shows \"freq  24 dB/oct\" for cuts)",
+    "doubleclick_add_select": "COMPLETE (double-click empty space adds AND selects the new band, so its controls appear immediately — Pro-Q behaviour)"
   },
   "error_recovery": {
     "last_backup": null,
