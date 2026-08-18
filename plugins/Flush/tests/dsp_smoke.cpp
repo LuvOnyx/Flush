@@ -971,6 +971,38 @@ int main() {
               ("max diff " + std::to_string(worst) + " dB").c_str());
     }
 
+    // ---- 37. Parallel EQ response = 1 + Σ(H-1), NOT the product -----------
+    {
+        // Two +6 dB bells at 1 kHz, Q 1, in PARALLEL (the actual audio topology):
+        //   out = dry + (H1(dry)-dry) + (H2(dry)-dry) = H1(dry) + H2(dry) - dry.
+        // At center the bell is exactly real (H = G), so |2G - 1| = 2*2 - 1 = 3
+        // -> 9.54 dB. A SERIAL product would read 6+6 = 12 dB (wrong for
+        // parallel; this was the bug in the UI curve + linear-phase FIR).
+        Biquad b1; b1.setCoef (matched::bell (fs, 1000.0, 6.0, 1.0));
+        Biquad b2; b2.setCoef (matched::bell (fs, 1000.0, 6.0, 1.0));
+        auto proc = [&](double x){ return b1.process (x) + b2.process (x) - x; };
+        const double g = measureGainDb (proc, fs, 1000.0);
+
+        const double G = dbToLin (6.0);
+        const double expected = 20.0 * std::log10 (2.0 * G - 1.0);
+        std::printf("         parallel 2x +6dB bells @1k: %.2f dB (serial product would be 12)\n", g);
+        CHECK("Parallel EQ sums deltas (not the serial product)",
+              std::fabs (g - expected) < 0.05,
+              ("measured " + std::to_string(g) + " vs expected " + std::to_string(expected)).c_str());
+        CHECK("Parallel sum is NOT 12 dB (product)", std::fabs (g - 12.0) > 1.0,
+              ("measured " + std::to_string(g) + " dB").c_str());
+
+        // The cascadeResponse + delta-sum helper must reproduce the measured value.
+        std::vector<BiquadCoef> one = { matched::bell (fs, 1000.0, 6.0, 1.0) };
+        const Complex h = cascadeResponse (one, 2.0 * kPi * 1000.0 / fs);
+        const double tre = 1.0 + 2.0 * (h.re - 1.0);
+        const double tim = 2.0 * h.im;
+        const double mag = 20.0 * std::log10 (std::hypot (tre, tim));
+        CHECK("cascadeResponse reproduces the parallel magnitude",
+              std::fabs (mag - g) < 0.05,
+              ("helper " + std::to_string(mag) + " vs measured " + std::to_string(g)).c_str());
+    }
+
     std::printf("\n%s — %d failure(s)\n", g_failures ? "FAILED" : "ALL PASSED", g_failures);
     return g_failures ? 1 : 0;
 }

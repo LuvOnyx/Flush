@@ -360,10 +360,6 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
     br.channel     = juce::jlimit (0, 2, (int)b.getProperty ("channel", 0));
     br.solo        = (bool)b.getProperty ("solo", false);
 
-    br.sectionsM.clear();
-    br.sectionsS.clear();
-    br.coefs.clear();
-
     // Real-time safety: a band is at most 4 sections (12-48 dB/oct cuts) or 1
     // (every other shape). Reserving that upper bound means the FIRST build (in
     // prepareToPlay, off the audio thread) allocates once, and subsequent
@@ -382,13 +378,13 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
     //   Linear      -> matched for now; FIR path is the next implementation pass
     const bool orfanidisMode = natural;
 
-    auto pushSection = [&](flush::BiquadCoef c) {
-        flush::MorphingBiquad bm; bm.setCoeffs (c, 0);   // ramp 0 = instant on build
-        flush::MorphingBiquad bs; bs.setCoeffs (c, 0);
-        br.sectionsM.push_back (bm);
-        br.sectionsS.push_back (bs);
-        br.coefs.push_back (c);                          // for linear-phase FIR design
-    };
+    // Compute the target coefficient list for this band first; then either MORPH
+    // the existing sections to it (click-free parameter changes — node drags,
+    // automation) or rebuild from scratch only when the structure changed
+    // (band type / slope altering the section count).
+    std::vector<flush::BiquadCoef> newCoefs;
+    newCoefs.reserve (4);
+    auto pushSection = [&](flush::BiquadCoef c) { newCoefs.push_back (c); };
 
     // Cuts use the Vicanek MATCHED (decramped) LP/HP, NOT the bilinear SVF: the
     // bilinear design re-cramps the high-frequency response near Nyquist, which
@@ -450,6 +446,27 @@ void FlushAudioProcessor::buildBand (int index, const juce::ValueTree& b,
         case flush::Shape::FlatTilt:
             pushSection (flush::firstOrderTilt (fs, f0, gain));
             break;
+    }
+
+    // Apply the new coefficients: morph in place when the section count is
+    // unchanged (the common case — frequency/gain/Q changes on a bell/shelf),
+    // rebuild only when the structure changed (type/slope changed the count).
+    if (!br.sectionsM.empty() && br.sectionsM.size() == newCoefs.size()) {
+        for (size_t i = 0; i < newCoefs.size(); ++i) {
+            br.sectionsM[i].setCoeffs (newCoefs[i], 64);   // 64-sample crossfade
+            br.sectionsS[i].setCoeffs (newCoefs[i], 64);
+        }
+        br.coefs = std::move (newCoefs);
+    } else {
+        br.sectionsM.clear();
+        br.sectionsS.clear();
+        for (const auto& c : newCoefs) {
+            flush::MorphingBiquad bm; bm.setCoeffs (c, 0);
+            flush::MorphingBiquad bs; bs.setCoeffs (c, 0);
+            br.sectionsM.push_back (bm);
+            br.sectionsS.push_back (bs);
+        }
+        br.coefs = std::move (newCoefs);
     }
 
     if (br.dynamic) {
@@ -515,16 +532,23 @@ double FlushAudioProcessor::processBandChannel (std::vector<flush::MorphingBiqua
     return out;
 }
 
-// Total magnitude of a band's cascade at frequency f (Hz) — used to design the
-// combined linear-phase FIR of the whole static EQ.
-double FlushAudioProcessor::bandMagnitudeAt (int index, double f) const
+// Total linear magnitude of the PARALLEL static EQ at frequency f (Hz):
+//   H_total(w) = 1 + Σ (H_i(w) - 1)  over the enabled, non-dynamic bands.
+// (A serial product would only be correct for a cascade; the audio path is
+// parallel, so the FIR must match the parallel response or the Linear-phase
+// mode sounds like a different EQ than what the curve shows.)
+double FlushAudioProcessor::staticEqMagnitudeLinear (double f) const
 {
-    const auto& br = bands_[index];
     const double w = 2.0 * kPi * f / procRate_;
-    double mag = 1.0;
-    for (const auto& c : br.coefs)
-        mag *= flush::magnitude (c, w);
-    return mag;
+    double re = 1.0, im = 0.0;
+    for (int i = 0; i < kMaxBands; ++i) {
+        const auto& br = bands_[i];
+        if (!br.enabled || br.dynamic) continue;   // static only
+        const flush::Complex h = flush::cascadeResponse (br.coefs, w);
+        re += h.re - 1.0;
+        im += h.im;
+    }
+    return std::hypot (re, im);
 }
 
 // Rebuild the combined linear-phase FIR from the static (non-dynamic) bands.
@@ -532,14 +556,7 @@ void FlushAudioProcessor::rebuildLinearFir()
 {
     linearReady_ = false;
 
-    auto magFn = [&](double f) {
-        double m = 1.0;
-        for (int i = 0; i < kMaxBands; ++i) {
-            if (!bands_[i].enabled || bands_[i].dynamic) continue;   // static only
-            m *= bandMagnitudeAt (i, f);
-        }
-        return m;
-    };
+    auto magFn = [&](double f) { return staticEqMagnitudeLinear (f); };
 
     linearCoeffs_ = flush::designLinearPhaseFir (magFn, procRate_, firLength_, 6.0);
     linearFirM_.set (linearCoeffs_);
@@ -571,6 +588,21 @@ void FlushAudioProcessor::processEqSample (double& m, double& s)
         // In linear-phase mode the static bands are handled by the combined FIR;
         // only the (minimum-phase) dynamic bands pass through this loop.
         if (linearActive_ && !br.dynamic) continue;
+
+        // Skip identity bands (0 dB gain, static, shapes that are exactly wire
+        // at 0 dB). Saves running 24 biquads when most bands are flat (the
+        // default preset starts with every band at 0 dB).
+        if (!br.dynamic && std::fabs (br.gainDb) < 1e-9) {
+            switch (br.shape) {
+                case flush::Shape::Bell:
+                case flush::Shape::LowShelf:
+                case flush::Shape::HighShelf:
+                case flush::Shape::TiltShelf:
+                case flush::Shape::FlatTilt:
+                    continue;
+                default: break;   // cuts/notch/band-pass are NOT identity at 0 dB
+            }
+        }
 
         const bool useM = (br.channel == 0 || br.channel == 1);   // stereo | mid
         const bool useS = (br.channel == 0 || br.channel == 2);   // stereo | side
@@ -1111,14 +1143,16 @@ double FlushAudioProcessor::eqResponseDb (double freqHz) const
 {
     std::lock_guard<std::mutex> lock (uiMutex_);
     const double w = 2.0 * kPi * freqHz / std::max (1.0, uiProcRate_);
-    double mag = 1.0;
+    // PARALLEL topology: total = 1 + Σ (H_i - 1). This is what the audio path
+    // actually does (and what Pro-Q displays) — not the serial product.
+    double re = 1.0, im = 0.0;
     for (int i = 0; i < kMaxBands; ++i) {
         if (!uiEnabled_[i]) continue;
-        double bandMag = 1.0;
-        for (const auto& c : uiCoefs_[i])
-            bandMag *= flush::magnitude (c, w);
-        mag *= bandMag;
+        const flush::Complex h = flush::cascadeResponse (uiCoefs_[i], w);
+        re += h.re - 1.0;
+        im += h.im;
     }
+    const double mag = std::hypot (re, im);
     return (mag > 1e-12) ? 20.0 * std::log10 (mag) : -120.0;
 }
 

@@ -5,7 +5,7 @@
   "ui_framework": "visage",
   "complexity_score": 4,
   "created_at": "2026-08-15T20:55:09Z",
-  "last_modified": "2026-08-16T05:00:00Z",
+  "last_modified": "2026-08-16T05:30:00Z",
   "phase_history": [
     {
       "phase": "ideation_complete",
@@ -31,7 +31,7 @@
       "phase": "code_in_progress",
       "completed_at": "2026-08-15T23:10:00Z",
       "framework_selected": "visage",
-      "notes": "'USE UA'S DATA' answered + clean-room BENCHMARKING harness added. Honest position: we CANNOT copy Sonnox/UAD proprietary coefficients — but there are three legitimate channels to their quality: (1) the public academic DSP they themselves build on (already in Flush: Orfanidis/Vicanek/Massberg/RBJ/BS.1770), (2) expired analog hardware schematics (Pultec/API/Neve/SSL/1176/LA-2A — the public circuit data behind UAD's character models), (3) clean-room measurement of a reference plugin's I/O behavior (magnitude/phase/THD/null) as a target to match independently. DELIVERED: docs/BENCHMARKING.md (the legal line + full measurement workflow) + tests/parity_tools.cpp (a dependency-free harness: gen sine/sweep/dual/impulse WAVs, measure fundamental level + THD (H2..H10) via Goertzel, null-diff two WAVs) — compiled + verified (exact -6.02 dBFS round-trip, -300 dB self-null). THIS is how 'using UA's information' is done legally. (1) USER PRESETS: full save/load/delete to userApplicationDataDirectory/Flush/Presets, state serialization refactored into createStateXml/applyStateXml (shared by DAW save, user presets, A/B); preset bar gets a SAVE button and now cycles the combined factory+user list. (2) FACTORY PRESETS: +7 rap/RnB/drill presets (808 Clean, Drill Vocal, RnB Air, Sub Tighten, Punch Bus, Clarity, Master Warm) = 14 total. (3) MID/SIDE COMPRESSOR: comp_mode is now Broadband/Mid-Side/Spectral; M/S mode splits, compresses M and S with independent DynamicsEngines (each with lookahead + adaptive release), recombines — verified the encode/decode is bit-exact; GR meter shows max(M,S). (4) ANALOG-MATCHED SVF: probed and PROVED the TPT/ZDF SVF == the RBJ bilinear design exactly (0.0000 dB across the band), and experimentally verified a single-g adjustment CANNOT decramp it (fixing @20k breaks the @1k cutoff) — the decramped SVF requires the joint (g,k) solve vs the analog prototype (Cytomic's technique), which the matched biquads already provide. Documented as the exact frontier with the method spelled out. KNOWN BOUNDARY (unchanged): JUCE/Visage layer still uncompiled here (see HANDOFF.md)."
+      "notes": "SOUND + CORRECTNESS PASS (86/86 DSP assertions). Found and fixed a REAL core bug by re-auditing the signal path: the UI EQ curve and the linear-phase FIR were computing the SERIAL product of band magnitudes, but the audio path is PARALLEL (out = dry + sum(H_i - dry)) - so the displayed curve and the Linear-phase mode did not match the audio whenever two bands overlapped. Now both use the correct complex response 1 + sum(H_i - 1) (verified: two +6 dB bells = 9.51 dB, not the 12 dB product). ALSO: coefficient morphing was DEAD CODE (rebuild used ramp=0 -> instant coefficient switches -> zipper on node drags); now rebuild MORPHS existing sections in place (64-sample crossfade, state seeded from active) when the section count is unchanged. 0 dB static bell/shelf/tilt bands now skip processing."
     }
   ],
   "validation": {
@@ -62,10 +62,10 @@
     "gain_q_link": "COMPLETE (analog-style Q narrowing with gain; verified)",
     "spectrum_analyzer": "COMPLETE (Hann FFT, overlap, tilt, peak hold, max-in-band)",
     "processor": "COMPLETE (APVTS + 24-band state + chain incl. linear FIR + 2x/4x oversampling + spectral mode + analyzer + metering + latency)",
-    "factory_presets": "COMPLETE (7 presets) + A/B compare slots",
+    "factory_presets": "COMPLETE (14 presets: added 808 Clean, Drill Vocal, RnB Air, Sub Tighten, Punch Bus, Clarity, Master Warm)",
     "svf_cuts": "COMPLETE (LowCut/HighCut run on TPT/ZDF SVF; verified 8th-order -12.04 dB @ fc)",
     "cut_type_fix": "COMPLETE (LowCut=high-pass / HighCut=low-pass semantics corrected)",
-    "band_solo": "COMPLETE (soloed bands isolate, Pro-Q style)",
+    "band_solo": "COMPLETE (delta solo: hear ONLY a soloed band's contribution, parallel topology)",
     "fir_quality_tiers": "COMPLETE (Low/Medium/High/Max -> 511/1023/2047/4095 taps)",
     "hardening": "COMPLETE (per-band dyn sample-rate fix, spectral GR meter, UI curve snapshot mutex, atomic dirty flags, latency-report ordering, const-correctness fix in processEqSample)",
     "ui_polish": "COMPLETE (knob track arc, drawn gear icon, on/off toggles, GR meter, analyzer top-edge, numeric meter readouts, toolbar layout)",
@@ -76,21 +76,22 @@
     "ui_interactions": "COMPLETE (right-click context menu on nodes, double-click add band / reset node, keyboard delete/backspace/arrows, Q via mouse wheel, value scrubbing in selected-band strip)",
     "ui_visuals": "COMPLETE (real vertical gradients via Brush, per-band colour nodes + hover glow, value bubbles, selected-band editor strip, dynamic accent theming, dB scale labels)",
     "ui_scaling_refresh": "COMPLETE (ui_scale 0.5-2.0 grows the window; fps_mode 60/120/uncapped drives the repaint timer)",
-    "band_solo": "COMPLETE (delta solo: hear ONLY a soloed band's contribution, parallel topology)",
-    "parallel_eq_topology": "COMPLETE (bands filter the DRY signal and sum deltas; was a serial cascade before — bands no longer interact, Pro-Q style)",
-    "decramped_cuts": "COMPLETE (cuts now use matched LP/HP — was bilinear SVF re-cramping ~18dB near Nyquist; verified -50.99 dB vs RBJ -70.22 dB @20k high-cut)",
-    "compressor_lookahead": "COMPLETE + FIXED (was a LAG — delayed GR on undelayed audio; now delayed AUDIO + undelayed GR, the correct direction; also fixed a 1-sample DelayLine off-by-one caught by the impulse test)",
-    "dynamic_band_lookahead": "REMOVED (correctly — dynamic EQ uses short attack + adaptive release, no lookahead, matching Pro-Q)",
+    "parallel_eq_topology": "COMPLETE (bands filter the DRY signal and sum deltas; was a serial cascade before \u2014 bands no longer interact, Pro-Q style)",
+    "decramped_cuts": "COMPLETE (cuts now use matched LP/HP \u2014 was bilinear SVF re-cramping ~18dB near Nyquist; verified -50.99 dB vs RBJ -70.22 dB @20k high-cut)",
+    "compressor_lookahead": "COMPLETE + FIXED (was a LAG \u2014 delayed GR on undelayed audio; now delayed AUDIO + undelayed GR, the correct direction; also fixed a 1-sample DelayLine off-by-one caught by the impulse test)",
+    "dynamic_band_lookahead": "REMOVED (correctly \u2014 dynamic EQ uses short attack + adaptive release, no lookahead, matching Pro-Q)",
     "analyzer_freeze": "COMPLETE (hard snapshot freeze, verified)",
     "analyzer_source": "COMPLETE (pre/post-EQ analyzer source switch)",
     "user_presets": "COMPLETE (save/load/delete user presets to userApplicationDataDirectory/Flush/Presets; state XML refactored into createStateXml/applyStateXml shared with DAW save + A/B)",
-    "factory_presets": "COMPLETE (14 presets: added 808 Clean, Drill Vocal, RnB Air, Sub Tighten, Punch Bus, Clarity, Master Warm)",
     "ms_compressor": "COMPLETE (comp_mode Broadband/Mid-Side/Spectral; independent M and S DynamicsEngines with lookahead; verified M/S encode-decode bit-exact)",
-    "svf_finding": "COMPLETE (proved SVF==RBJ bilinear exactly; experimentally verified decramped SVF needs the joint (g,k) solve — single-g cannot fix both cutoff AND Nyquist; matched biquads already deliver that decramped magnitude)",
-    "benchmarking_harness": "COMPLETE (docs/BENCHMARKING.md + tests/parity_tools.cpp: generate stimuli, measure freq response + THD, null-diff — the clean-room path to reference parity)",
+    "svf_finding": "COMPLETE (proved SVF==RBJ bilinear exactly; experimentally verified decramped SVF needs the joint (g,k) solve \u2014 single-g cannot fix both cutoff AND Nyquist; matched biquads already deliver that decramped magnitude)",
+    "benchmarking_harness": "COMPLETE (docs/BENCHMARKING.md + tests/parity_tools.cpp: generate stimuli, measure freq response + THD, null-diff \u2014 the clean-room path to reference parity)",
     "visage_ui": "WRITTEN (FabFilter-grade: gradients, per-band colours, hover/glow, Q editing, value bubbles, selected-band strip, theming, scaling, 120Hz, freeze + in/out toolbar, SAVE button; uncompiled in this env)",
     "user_presets_save_load": "PENDING (format defined)",
-    "compile": "PENDING (needs cmake + platform libs)"
+    "compile": "PENDING (needs cmake + platform libs)",
+    "parallel_response_fix": "COMPLETE (UI curve + linear-phase FIR were using the SERIAL product; now compute 1 + sum(H-1) complex \u2014 verified 2x +6dB bells = 9.51 dB not 12 dB)",
+    "coefficient_morphing": "COMPLETE (re-enabled: rebuild now MORPHS sections in place with 64-sample crossfade + state seeding when the section count is unchanged; was dead code with ramp=0 -> zipper on node drags)",
+    "identity_band_skip": "COMPLETE (0 dB static bell/shelf/tilt bands skip processing \u2014 saves 24 biquad runs when flat)"
   },
   "error_recovery": {
     "last_backup": null,

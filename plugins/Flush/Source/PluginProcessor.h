@@ -148,7 +148,7 @@ private:
     void publishUiSnapshot (double sampleRate);
     double processBandChannel (std::vector<flush::MorphingBiquad>& sections, double in);
     void processEqSample (double& m, double& s);
-    double bandMagnitudeAt (int index, double f) const;
+    double staticEqMagnitudeLinear (double f) const;   // |1 + Σ(H_i - 1)|, static bands
     void rebuildLinearFir();
 
     // UI thread reads the EQ curve from a mutex-guarded snapshot of the band

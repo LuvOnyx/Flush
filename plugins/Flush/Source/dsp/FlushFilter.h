@@ -17,7 +17,9 @@
 
 #pragma once
 
+#include <vector>
 #include "FlushCommon.h"
+#include "FlushFft.h"
 
 namespace flush {
 
@@ -43,6 +45,36 @@ inline double magnitude (const BiquadCoef& c, double w)
     const double dim = -(c.a1 * sw + c.a2 * s2w);
     const double den = dre * dre + dim * dim;
     return std::sqrt ((nre * nre + nim * nim) / std::max (den, 1e-30));
+}
+
+// COMPLEX response H(e^jw) of one biquad. Needed for the PARALLEL EQ topology:
+// the total response is 1 + Σ (H_i - 1), a complex addition — NOT the product of
+// the band magnitudes (which would only be correct for a serial cascade).
+inline Complex response (const BiquadCoef& c, double w)
+{
+    const double cw  = std::cos (w),  sw  = std::sin (w);
+    const double c2w = std::cos (2.0 * w), s2w = std::sin (2.0 * w);
+    const double nre = c.b0 + c.b1 * cw + c.b2 * c2w;
+    const double nim = -(c.b1 * sw + c.b2 * s2w);
+    const double dre = 1.0 + c.a1 * cw + c.a2 * c2w;
+    const double dim = -(c.a1 * sw + c.a2 * s2w);
+    const double den = std::max (dre * dre + dim * dim, 1e-30);
+    // (nre + i*nim) / (dre + i*dim)
+    return { (nre * dre + nim * dim) / den,
+             (nim * dre - nre * dim) / den };
+}
+
+// Complex response of a serial CASCADE of sections (a single band's internal
+// sections are cascaded, so the product of their responses is correct).
+inline Complex cascadeResponse (const std::vector<BiquadCoef>& coefs, double w)
+{
+    Complex r { 1.0, 0.0 };
+    for (const auto& c : coefs) {
+        const Complex h = response (c, w);
+        r = { r.re * h.re - r.im * h.im,
+              r.re * h.im + r.im * h.re };
+    }
+    return r;
 }
 
 // Clamp a Q into a numerically safe band (guards division-by-zero / pole
@@ -474,8 +506,12 @@ struct MorphingBiquad
             morphing = false;
             return;
         }
+        // Seed the incoming filter's STATE from the active filter so the
+        // crossfade starts from the exact current state (no discontinuity at
+        // the switch), then swap in the new coefficients. Both filters stay
+        // stable throughout the crossfade.
+        incoming = active;
         incoming.setCoef (c);
-        incoming.reset();
         morphing = true;
         mix = 0.0;
         step = 1.0 / std::max (1, ramp);
