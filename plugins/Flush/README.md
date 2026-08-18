@@ -91,7 +91,7 @@ cd plugins/Flush/tests
 g++ -std=c++20 -O2 -I../Source/dsp dsp_smoke.cpp -o dsp_smoke && ./dsp_smoke
 ```
 
-83 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
+86 assertions measure the actual responses: exact center gain, boost/cut cancel-to-wire,
 LP/HP −3.01 dB @ fc, a three-way no-cramp comparison (RBJ 47% vs Vicanek 7% vs Orfanidis
 2.1%), decramped shelves vs the analog prototype, TPT/ZDF SVF, coefficient morphing,
 Oxford-style adaptive release, Flush Match (K-weighted) neutralizing a +6 dB change and
