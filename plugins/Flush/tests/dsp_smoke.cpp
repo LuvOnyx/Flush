@@ -199,6 +199,23 @@ int main() {
               std::fabs(gr - 7.5) < 0.05, ("measured " + std::to_string(gr) + " dB").c_str());
     }
 
+    // ---- 6b. Dynamics rangeDb caps gain reduction (dynamic EQ "range") -----
+    // The UI maps Alt+wheel to this. It must be a hard ceiling on GR, not just
+    // a display value: a 40 dB overshoot with rangeDb = 6 dB must sit at 6 dB.
+    {
+        DynamicsEngine eng;
+        eng.reset(fs);
+        DynamicsParams p; p.thresholdDb = -40.0; p.ratio = 20.0;
+        p.attackSec = 0.0005; p.releaseSec = 0.5; p.kneeDb = 0.0; p.rangeDb = 6.0;
+        eng.setParams(p);
+        double gr = 0.0;
+        const int n = (int)(fs * 1.0);
+        for (int i = 0; i < n; ++i) gr = eng.processGrDb(1.0);   // DC full-scale
+        // over = 0 - (-40) = 40 dB; uncapped gr = 40 * (1 - 1/20) = 38 dB.
+        CHECK("Dynamics rangeDb caps GR at 6 dB (40 dB overshoot)",
+              std::fabs(gr - 6.0) < 0.02, ("measured " + std::to_string(gr) + " dB").c_str());
+    }
+
     // ---- 7. Flush Match: Match Input neutralizes a +6 dB change ----------
     {
         FlushMatch fm;

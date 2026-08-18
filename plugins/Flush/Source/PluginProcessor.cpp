@@ -1173,6 +1173,33 @@ void FlushAudioProcessor::setBandSolo (int index, bool on)
     markBandsDirty();
 }
 
+void FlushAudioProcessor::setBandSlope (int index, double slopeDbOct)
+{
+    if (index < 0 || index >= kMaxBands) return;
+    std::lock_guard<std::mutex> lock (bandMutex_);
+    // The DSP quantizes slope to 12/24/36/48 dB/oct (1-4 2nd-order sections).
+    bandTree.getChild (index).setProperty ("slope", juce::jlimit (12.0, 48.0, slopeDbOct), nullptr);
+    markBandsDirty();
+}
+
+void FlushAudioProcessor::setBandDynRange (int index, double rangeDb)
+{
+    if (index < 0 || index >= kMaxBands) return;
+    std::lock_guard<std::mutex> lock (bandMutex_);
+    bandTree.getChild (index).setProperty ("dynRange", juce::jlimit (0.0, 60.0, rangeDb), nullptr);
+    markBandsDirty();
+}
+
+void FlushAudioProcessor::setBandGainDynRange (int index, double gainDb, double rangeDb)
+{
+    if (index < 0 || index >= kMaxBands) return;
+    std::lock_guard<std::mutex> lock (bandMutex_);
+    auto b = bandTree.getChild (index);
+    b.setProperty ("gain", juce::jlimit (-30.0, 30.0, gainDb), nullptr);
+    b.setProperty ("dynRange", juce::jlimit (0.0, 60.0, rangeDb), nullptr);
+    markBandsDirty();
+}
+
 double FlushAudioProcessor::eqResponseDb (double freqHz) const
 {
     std::lock_guard<std::mutex> lock (uiMutex_);

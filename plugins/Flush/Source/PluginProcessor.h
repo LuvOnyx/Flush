@@ -92,6 +92,9 @@ public:
     void setBandChannel (int index, int channel);   // 0 stereo, 1 mid, 2 side
     void setBandDynamic (int index, bool on);
     void setBandSolo (int index, bool on);
+    void setBandSlope (int index, double slopeDbOct);            // 12..48 (cuts)
+    void setBandDynRange (int index, double rangeDb);            // 0..60 (dynamic bands)
+    void setBandGainDynRange (int index, double gainDb, double rangeDb); // atomic linked trade
 
     //--- Analyzer access for the UI (lock-free read of the dB magnitudes) ---
     const std::vector<float>& analyzerMagnitudes() { return analyzer_.magnitudes(); }

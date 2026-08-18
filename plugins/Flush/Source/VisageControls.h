@@ -597,6 +597,10 @@ public:
         drawAnalyzerToolbar (canvas, accent, accentSoft);
         drawSelectedStrip (canvas, accent, accentSoft);
 
+        // Pro-Q4-style node tooltip on hover (freq / gain / Q / slope / channel).
+        if (hovered_ >= 0 && !dragging_ && scrubbing_ < 0)
+            drawNodeTooltip (canvas);
+
         // Value bubble while dragging / scrubbing.
         if (dragging_ || scrubbing_ >= 0) {
             const float bw = 150.0f;
@@ -682,16 +686,11 @@ public:
         const bool solo = (bool)b.getProperty ("solo", false);
         const int  ch  = juce::jlimit (0, 2, (int)b.getProperty ("channel", 0));
 
-        static constexpr const char* kShapeNames[] = {
-            "Bell", "Notch", "Low Shelf", "High Shelf", "Low Cut",
-            "High Cut", "Band Pass", "Tilt Shelf", "Flat Tilt", "All Pass"
-        };
-
         // Type (click cycles).
         canvas.setColor (stripHover_ == 0 ? C::surface2 : C::surface);
         canvas.roundedRectangle (s.typeX, s.y + 4.0f, s.typeW, s.h - 8.0f, 4.0f);
         canvas.setColor (accent);
-        canvas.text (kShapeNames[juce::jlimit (0, 9, shape)], smallFont_, visage::Font::kCenter,
+        canvas.text (shapeName (shape), smallFont_, visage::Font::kCenter,
                      s.typeX, s.y + 6.0f, s.typeW, s.h - 12.0f);
 
         drawScrub (canvas, 1, s.freqX, s.y, s.valW, "FREQ", freqText (f));
@@ -727,6 +726,64 @@ public:
         canvas.text (value.toRawUTF8(), smallFont_, visage::Font::kCenter, x, y + 15.0f, w, 11.0f);
     }
 
+    // Pro-Q4 node tooltip: a small floating card anchored to the hovered band,
+    // reading band number + type (with Mid/Side and DYN tags), then frequency,
+    // then gain + Q (or slope for cuts). It flips left/right and clamps inside
+    // the plot so it never gets clipped at the edges.
+    void drawNodeTooltip (visage::Canvas& canvas)
+    {
+        if (hovered_ < 0 || hovered_ >= cachedBands_.getNumChildren()) return;
+        const auto b = cachedBands_.getChild (hovered_);
+        if (!(bool)b.getProperty ("enabled", false)) return;
+
+        const double f = b.getProperty ("freq", 1000.0);
+        const double g = b.getProperty ("gain", 0.0);
+        const double q = b.getProperty ("q", 1.0);
+        const double slope = b.getProperty ("slope", 12.0);
+        const int shape = (int)b.getProperty ("shape", (int)flush::Shape::Bell);
+        const int ch = juce::jlimit (0, 2, (int)b.getProperty ("channel", 0));
+        const bool dyn = (bool)b.getProperty ("dynamic", false);
+
+        const float px = plotX(), py = plotY(), pw = plotW(), ph = plotH();
+        const double range = displayRange();
+        const float nx = px + pw * (float)(std::log10 (f / 20.0) / std::log10 (20000.0 / 20.0));
+        const float ny = py + ph * 0.5f - ph * 0.5f * (float)(g / range);
+
+        const float boxW = 152.0f, boxH = 46.0f;
+        float bx = nx + 14.0f;                                   // prefer right of node
+        if (bx + boxW > px + pw - 4.0f) bx = nx - boxW - 14.0f;  // flip left near the edge
+        bx = clamp (bx, px + 4.0f, px + pw - boxW - 4.0f);
+        float by = clamp (ny - boxH * 0.5f, py + 4.0f, py + ph - boxH - 4.0f);
+
+        canvas.setColor (0xee23272f);
+        canvas.roundedRectangle (bx, by, boxW, boxH, 5.0f);
+        canvas.setColor (C::hairline);
+        canvas.roundedRectangleBorder (bx, by, boxW, boxH, 5.0f, 1.0f);
+
+        juce::String title = juce::String (hovered_ + 1) + " - " + shapeName (shape);
+        if (ch != 0) title += juce::String ("  ") + channelName (ch);
+        if (dyn)     title += "  DYN";
+
+        juce::String line2 = freqText (f);
+        juce::String line3;
+        if (shapeIsCut (shape))
+            line3 = slopeText (slope);
+        else if (shapeHasGain (shape))
+            line3 = gainText (g) + "   Q " + qText (q);
+        else
+            line3 = "Q " + qText (q);
+
+        canvas.setColor (C::textDim);
+        canvas.text (title.toRawUTF8(), labelFont_, visage::Font::kLeft,
+                     bx + 9.0f, by + 4.0f, boxW - 18.0f, 10.0f);
+        canvas.setColor (C::text);
+        canvas.text (line2.toRawUTF8(), valueFont_, visage::Font::kLeft,
+                     bx + 9.0f, by + 15.0f, boxW - 18.0f, 13.0f);
+        canvas.setColor (dyn ? C::yellow : C::text);
+        canvas.text (line3.toRawUTF8(), valueFont_, visage::Font::kLeft,
+                     bx + 9.0f, by + 28.0f, boxW - 18.0f, 13.0f);
+    }
+
     // ------------------------------------------------------------ helpers ----
     double displayRange() const
     {
@@ -752,6 +809,36 @@ public:
     static juce::String qText (double q)
     {
         return juce::String (q, 2);
+    }
+    static juce::String slopeText (double slope)
+    {
+        return juce::String (juce::jmax (1, (int)std::lround (slope))) + " dB/oct";
+    }
+    static const char* shapeName (int shape)
+    {
+        static constexpr const char* kNames[] = {
+            "Bell", "Notch", "Low Shelf", "High Shelf", "Low Cut",
+            "High Cut", "Band Pass", "Tilt Shelf", "Flat Tilt", "All Pass"
+        };
+        return kNames[juce::jlimit (0, 9, shape)];
+    }
+    static const char* channelName (int ch)
+    {
+        static constexpr const char* kNames[] = { "Stereo", "Mid", "Side" };
+        return kNames[juce::jlimit (0, 2, ch)];
+    }
+    static bool shapeHasGain (int shape)
+    {
+        return shape == (int)flush::Shape::Bell ||
+               shape == (int)flush::Shape::LowShelf ||
+               shape == (int)flush::Shape::HighShelf ||
+               shape == (int)flush::Shape::TiltShelf ||
+               shape == (int)flush::Shape::FlatTilt;
+    }
+    static bool shapeIsCut (int shape)
+    {
+        return shape == (int)flush::Shape::LowCut ||
+               shape == (int)flush::Shape::HighCut;
     }
 
     int hitTest (float x, float y)
@@ -871,16 +958,56 @@ public:
 
     void mouseUp (const visage::MouseEvent&) override { dragging_ = false; scrubbing_ = -1; }
 
+    // Mouse wheel over a band node — matches FabFilter Pro-Q 4's modifier map:
+    //   wheel                  -> Q (bell/shelf/notch/band-pass/tilt/all-pass)
+    //   wheel over a cut       -> slope (stepped 12/24/36/48 dB/oct)
+    //   Ctrl/Cmd + wheel       -> gain (bell/shelves/tilts only)
+    //   Alt + wheel            -> dynamic range (dynamic bands only)
+    //   Alt+Ctrl/Cmd + wheel   -> linked trade of gain for dynamic range
+    //   Shift + wheel          -> fine (smaller steps for Q/gain/range)
+    // Scroll up (positive wheel_delta_y) increases the value.
     bool mouseWheel (const visage::MouseEvent& e) override
     {
         const int hit = (e.position.y <= plotY() + plotH()) ? hitTest (e.position.x, e.position.y) : -1;
         if (hit < 0) return false;
         auto b = processor_.getBand (hit);
         if (!b.isValid()) return false;
-        double q = b.getProperty ("q", 1.0);
-        q *= std::pow (1.10, -e.wheel_delta_y * (e.isShiftDown() ? 0.2 : 1.0));
-        processor_.setBandQ (hit, q);
+
+        const float dy = e.wheel_delta_y;               // positive = scroll up
+        if (dy == 0.0f) return true;                    // horizontal wheel: consumed
+        const bool fine = e.isShiftDown();
+        const bool main = e.isMainModifier();           // Ctrl (Win/Linux) / Cmd (macOS)
+        const bool alt  = e.isAltDown();
+
+        const int shape = (int)b.getProperty ("shape", (int)flush::Shape::Bell);
+        const bool hasGain = shapeHasGain (shape);
+        const bool isCut = shapeIsCut (shape);
+        const bool dynamic = (bool)b.getProperty ("dynamic", false);
+
         selected_ = hit;
+
+        if (alt && main && dynamic && hasGain) {
+            const double g = b.getProperty ("gain", 0.0);
+            const double r = b.getProperty ("dynRange", 12.0);
+            const double step = fine ? 0.1 : 0.5;
+            processor_.setBandGainDynRange (hit,
+                juce::jlimit (-30.0, 30.0, g + dy * step),
+                juce::jlimit (0.0, 60.0, r - dy * step));
+        } else if (main && hasGain) {
+            const double g = b.getProperty ("gain", 0.0);
+            processor_.setBandGain (hit, juce::jlimit (-30.0, 30.0, g + dy * (fine ? 0.1 : 0.5)));
+        } else if (alt && dynamic) {
+            const double r = b.getProperty ("dynRange", 12.0);
+            processor_.setBandDynRange (hit, juce::jlimit (0.0, 60.0, r + dy * (fine ? 0.2 : 1.0)));
+        } else if (isCut && !main && !alt) {
+            const double slope = b.getProperty ("slope", 12.0);
+            processor_.setBandSlope (hit, juce::jlimit (12.0, 48.0, slope + (dy > 0.0f ? 12.0 : -12.0)));
+        } else if (!main && !alt) {
+            double q = b.getProperty ("q", 1.0);
+            q *= std::pow (1.10, dy * (fine ? 0.2 : 1.0));
+            processor_.setBandQ (hit, q);
+        }
+
         redraw();
         return true;
     }
@@ -1033,16 +1160,11 @@ private:
         const float addFreq = freqAtX (e.position.x);
         const visage::Point menuPos = e.position;
 
-        static constexpr const char* kShapeNames[] = {
-            "Bell", "Notch", "Low Shelf", "High Shelf", "Low Cut",
-            "High Cut", "Band Pass", "Tilt Shelf", "Flat Tilt", "All Pass"
-        };
-
         contextMenu_ = visage::PopupMenu();
         if (hit >= 0) {
             visage::PopupMenu typeMenu ("Type");
             for (int s = 0; s < 10; ++s)
-                typeMenu.addOption (1000 + s, visage::String (kShapeNames[s]));
+                typeMenu.addOption (1000 + s, visage::String (shapeName (s)));
             contextMenu_.addSubMenu (std::move (typeMenu));
 
             visage::PopupMenu chMenu ("Channel");
